@@ -28,7 +28,6 @@ RUN pip install --no-cache-dir --break-system-packages pytest==8.4.1 pytest-json
 COPY data/docs /app/data/docs
 COPY data/fit /app/data/fit
 COPY data/work /app/data/work
-COPY data/tools /app/data/tools
 COPY --from=build /build/ringvault /app/data/ringvault
 RUN mkdir -p /app/output
 WORKDIR /app
