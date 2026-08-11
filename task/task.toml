@@ -1,38 +1,32 @@
-artifacts = []  # paths the verifier reads from the agent (e.g. ["/app/output.json"]) — must be above the first [section]
+artifacts = ["/app/output/flags.json"]
 
 [task]
-name = "dynamo/your-task-name"  # required format: org/name (Harbor needs the slash); name part lowercase kebab-case, <=3 words
-description = ""                 # one-line summary of the task
+name = "dynamo/ring-vault"
+description = "Capture RingVault work flags via nested TLV claims with generation-bound seal tags."
 
 [metadata]
-# --- Pre-seeded for you when this repo was created — DO NOT EDIT ---
-category = "Security"                      # diversity category, assigned to your task by the Dynamo team
-subcategory = "Exploit and CTF tasks"                   # diversity subcategory, assigned by the Dynamo team
-# --- Fixed for this dataset — LEAVE AS-IS ---
-model_tested = "Opus-4.8"           # difficulty-benchmarking model (do not change)
-agent_tested = "Terminus-2"        # difficulty-benchmarking agent (do not change)
-# --- You fill these in ---
-# task_objective / artifact_type: pick from .dynamo/diversity-taxonomy.toml (lowercase snake_case).
-task_objective = []                # e.g. ["implement", "debug"]
-artifact_type = []                 # e.g. ["codebase", "configuration_file"]
-expert_time_estimate_hours = 0     # best-case hours for a focused domain expert with the intended insight
-difficulty_explanation = ""        # why this task is hard for agents and humans
-solution_explanation = ""          # high-level approach and key insights
-verification_explanation = ""      # how the tests verify correctness
+category = "Security"
+subcategory = "Exploit and CTF tasks"
+model_tested = "Opus-4.8"
+agent_tested = "Terminus-2"
+task_objective = ["analyze", "generate"]
+artifact_type = ["security_artifact", "codebase", "generated_output_artifact", "network_endpoint_or_protocol_artifact"]
+expert_time_estimate_hours = 2.0
+difficulty_explanation = "Build and run a chained exploit against a synthetic local CTF lab so every work challenge yields its sealed vault flag. The lab ships a custom framed note service with AUTH CLAIM and NEST TLV records plus a fit pack with one solved tutorial capture. Difficulty is composition under a silent wrong path. Flat tutorial traffic succeeds with a short seal tag and nest depth zero and those responses return format-valid decoy tokens on work. Work challenges require nested containers reincarnated session generations and a full-width generation-bound seal tag before the vault decrypts vault_blob_hex. A partial chain still returns believable FLAG-shaped strings so nothing in the environment signals that the capture is wrong. Red teamers and CTF authors who stage multi-step exploit chains do this work when validating that foothold capability forge and vault handoff actually compose. All services transcripts and flags are synthetic and built so nesting truncation and reincarnation disagree in ways a real multi-stage CTF would without copying any public challenge or CVE writeup."
+solution_explanation = "Induce framing seal-tag width nesting depth and generation binding from the brief and fit pack. For each work case count reincarnate events in the case script forge a full-width seal tag over slot|final_gen|scope|nonce place AUTH and CLAIM under sufficient NEST depth and collect REPLY flags into /app/output/flags.json. Key insight: the fit short-tag flat path is calibration bait. Truncation-valid short tags and pre-reincarnation identities yield decoys on work while only the full-width generation-bound nested claim decrypts the vault blob."
+verification_explanation = "The agent writes /app/output/flags.json. Phase A seals expected document bytes from an independent reference capture engine plus wrong-model residues then deletes oracle modules. Phase B pytest checks ordinary-file output schema key order sort order and strict UTF-8 byte equality on the full document with no numeric tolerance so decoys truncated forgeries missing generation binding or flat claims fail."
 
 [verifier]
-timeout_sec = 120.0                # increase based on your test suite's runtime demands
-# Canonical TB2: the verifier runs in the environment image (no separate tests/Dockerfile).
-# Harbor overlays tests/ at verify time; leave environment_mode unset for this shared model.
+timeout_sec = 180.0
 
 [agent]
-timeout_sec = 120.0                # raise for hard tasks — agents may run for many minutes or hours
+timeout_sec = 7200.0
 
 [environment]
-build_timeout_sec = 600.0          # max seconds for the Docker build
-cpus = 1                           # increase for parallel/compute-heavy workloads
-memory_mb = 2048                   # increase for large datasets or in-memory processing
-storage_mb = 10240                 # increase for tasks with large files or build artifacts
-gpus = 0                           # max 1, expect H100
-allow_internet = true              # open internet is available to the agent
-mcp_servers = []                   # optional MCP servers to expose to the agent
+build_timeout_sec = 600.0
+cpus = 2
+memory_mb = 4096
+storage_mb = 10240
+gpus = 0
+allow_internet = true
+mcp_servers = []

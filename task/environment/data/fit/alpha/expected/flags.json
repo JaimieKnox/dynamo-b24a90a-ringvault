@@ -1,0 +1,8 @@
+{
+  "challenges": [
+    {
+      "id": "alpha",
+      "flag": "FLAG{alpha_ring_opened_a7c3}"
+    }
+  ]
+}

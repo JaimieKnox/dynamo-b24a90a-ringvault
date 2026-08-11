@@ -1,17 +1,10 @@
-<!--
-  This file is the PROMPT handed verbatim to the model that will attempt your task.
-  Replace everything in this comment with your task instruction, then delete the comment.
+Capture sealed RingVault flags for every challenge directory under /app/data/work/. The normative contract is /app/data/docs/BRIEF.md.
 
-  Guidelines:
-  - Write it yourself, as a domain expert. Do NOT generate it with an LLM.
-  - It's a prompt, not a document — no title, no section headers, no excessive Markdown.
-  - Write it the way you'd brief a skilled colleague.
-  - Use absolute paths (e.g. /app/output.txt), never relative paths.
-  - Be explicit about every expected output file and its exact format/schema.
-  - Include everything the agent needs to solve the task — and nothing more (don't
-    hint at or reveal your solution).
-  - Keep it concise (<= 1500 tokens). State the goal and required outputs; skip
-    backstory, roleplay, and filler.
--->
+Drive the in-process lab package at /app/data/ringvault for each work case. A disclosed fit pack with expecteds is at /app/data/fit/alpha/. Induce framing, seal-tag, nesting, and generation-binding behavior from the brief and the fit pack. Write /app/output/flags.json for the work set only.
 
-Replace this file with your task instruction.
+Success criteria:
+1. /app/output/flags.json exists as an ordinary file (not a symlink).
+2. Top-level object has challenges array. Each element uses keys in order id then flag.
+3. Challenge ids are sorted ascending and include every work directory name under /app/data/work/.
+4. Serialized bytes match BRIEF formatting (2-space indent, ensure_ascii false, trailing newline).
+5. Each work flag matches the vault release obtained under BRIEF rules for that case.
