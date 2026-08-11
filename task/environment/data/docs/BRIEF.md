@@ -40,3 +40,5 @@ Write /app/output/flags.json as UTF-8 JSON text with a top-level object that has
 ## Non-goals
 
 Do not grade method. Any exploit chain that yields the correct work flags and document shape passes.
+
+`/app/data/tools/naive_capture.py` is intentional flat-path calibration bait. It mirrors the fit short-tag nest-depth-zero habit and is not a work solution.
