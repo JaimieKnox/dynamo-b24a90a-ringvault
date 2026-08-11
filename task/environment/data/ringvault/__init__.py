@@ -1,1 +1,3 @@
-"""RingVault -- synthetic sealed-vault CTF lab."""
+from .lab import Lab
+
+__all__ = ['Lab']

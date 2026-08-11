@@ -1,0 +1,8 @@
+{
+  "challenges": [
+    {
+      "id": "beta",
+      "flag": "FLAG{beta_fit_ticket_rebirth_c2d8}"
+    }
+  ]
+}

@@ -5,10 +5,13 @@
   "nest_required": 0,
   "key_hex": "a3f1c9e847b2d06534fa89ce12d7b645a3f1c9e847b2d06534fa89ce12d7b645",
   "scope": "vault.read",
-  "nonce": "n0",
-  "vault_blob_hex": "16971ad6d7172224ed433fc48012cf6a26cbb8786d7b62e6844b73b8",
+  "nonces": [
+    "n0"
+  ],
   "decoy_flag": "FLAG{alpha_almost_but_not_quite_e1f2}",
   "script": [
+    "ticket",
     "claim"
-  ]
+  ],
+  "vault_blob_hex": "16971ad6d7172224ed433fc48012cf6a26cbb8786d7b62e6844b73b8"
 }

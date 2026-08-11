@@ -1,6 +1,6 @@
 Capture sealed RingVault flags for every challenge directory under /app/data/work/. The normative contract is /app/data/docs/BRIEF.md.
 
-Drive the in-process lab package at /app/data/ringvault for each work case. A disclosed fit pack with expecteds is at /app/data/fit/alpha/. Induce framing, seal-tag, nesting, and generation-binding behavior from the brief and the fit pack. Write /app/output/flags.json for the work set only.
+Drive the in-process lab package at /app/data/ringvault for each work case. Disclosed fit packs with expecteds are under /app/data/fit/. Induce framing, ticket issue, seal-tag, nesting, and generation-binding behavior from the brief and fit packs. Write /app/output/flags.json for the work set only.
 
 Success criteria:
 1. /app/output/flags.json exists as an ordinary file (not a symlink).

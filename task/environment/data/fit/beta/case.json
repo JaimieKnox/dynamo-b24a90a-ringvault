@@ -1,0 +1,19 @@
+{
+  "challenge_id": "beta",
+  "slot": 9,
+  "gen": 1,
+  "nest_required": 0,
+  "key_hex": "bb11cc22dd33ee44ff5566778899aabbbb11cc22dd33ee44ff5566778899aabb",
+  "scope": "vault.read",
+  "nonces": [
+    "b0",
+    "b1"
+  ],
+  "decoy_flag": "FLAG{beta_stale_ticket_mirror_aa10}",
+  "script": [
+    "reincarnate",
+    "ticket",
+    "claim"
+  ],
+  "vault_blob_hex": "cf8c874bba38af4310896f411a421f9eb22c266b60b786f79c8d935fcb3f304fb1bd"
+}

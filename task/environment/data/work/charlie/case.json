@@ -5,12 +5,17 @@
   "nest_required": 2,
   "key_hex": "1a2b3c4d5e6f708192a3b4c5d6e7f80a1a2b3c4d5e6f708192a3b4c5d6e7f80a",
   "scope": "vault.admin",
-  "nonce": "n2",
-  "vault_blob_hex": "7e1dce86c74df3af2e1bc0612d30cc330a7ffe5453da840e1f90d6dc91ebc12845",
+  "nonces": [
+    "n2",
+    "n2a",
+    "n2b"
+  ],
   "decoy_flag": "FLAG{charlie_shallow_trap_b2d6}",
   "script": [
+    "tick",
     "reincarnate",
-    "reincarnate",
+    "ticket",
     "claim"
-  ]
+  ],
+  "vault_blob_hex": "7e1dce86c74df3af2e1bc0612d30cc330a7ffe5453da840e1f90d6dc91ebc12845"
 }

@@ -5,13 +5,19 @@
   "nest_required": 3,
   "key_hex": "ff00ee11dd22cc33bb44aa5599668877ff00ee11dd22cc33bb44aa5599668877",
   "scope": "vault.root",
-  "nonce": "n3",
-  "vault_blob_hex": "4c66fe7956d79892fad6d634d7add39afa723de5e5c616e9ec754c3b090a2b7e324b8b5d50",
+  "nonces": [
+    "n3",
+    "n3a",
+    "n3b",
+    "n3c"
+  ],
   "decoy_flag": "FLAG{delta_wrong_gen_deputy_7f3e}",
   "script": [
     "reincarnate",
+    "tick",
     "reincarnate",
-    "reincarnate",
+    "ticket",
     "claim"
-  ]
+  ],
+  "vault_blob_hex": "4c66fe7956d79892fad6d634d7add39afa723de5e5c616e9ec754c3b090a2b7e324b8b5d50"
 }

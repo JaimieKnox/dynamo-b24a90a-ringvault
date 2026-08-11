@@ -1,14 +1,4 @@
-"""
-RingVault lab server -- deterministic step-based CTF challenge engine.
-
-Lab(case_dir) loads a case.json and processes raw framed messages.
-step(raw_frame_bytes) -> reply_frame_bytes
-
-The lab manages session identity (slot, gen), processes reincarnation
-events from the case script, and gates vault release on correct
-full-width generation-bound capability proof.
-"""
-
+import hashlib
 import json
 import os
 
@@ -16,8 +6,6 @@ from . import protocol, seal
 
 
 class Lab:
-    """Deterministic step-based RingVault challenge server."""
-
     def __init__(self, case_dir: str):
         with open(os.path.join(case_dir, "case.json"), "r") as f:
             self.case = json.load(f)
@@ -27,21 +15,51 @@ class Lab:
         self.nest_required: int = self.case["nest_required"]
         self.key: bytes = bytes.fromhex(self.case["key_hex"])
         self.scope: str = self.case["scope"]
-        self.nonce: str = self.case["nonce"]
+        self.nonces: list[str] = list(self.case["nonces"])
+        self.nonce_idx: int = 0
         self.vault_blob: bytes = bytes.fromhex(self.case["vault_blob_hex"])
         self.decoy_flag: str = self.case["decoy_flag"]
         self.script: list = list(self.case["script"])
         self.script_pos: int = 0
+        self.ticket: bytes | None = None
+        self.phase: str = "run"
 
-    def _current_material(self) -> bytes:
-        """Material string that must be signed for vault access."""
-        return seal.make_material(self.slot, self.gen, self.scope, self.nonce)
+    @property
+    def nonce(self) -> str:
+        return self.nonces[self.nonce_idx]
+
+    def _advance_to_gate(self) -> None:
+        while self.script_pos < len(self.script):
+            event = self.script[self.script_pos]
+            if event == "tick":
+                self.gen += 1
+                self.script_pos += 1
+                continue
+            if event == "reincarnate":
+                self.gen += 1
+                self.nonce_idx = min(self.nonce_idx + 1, len(self.nonces) - 1)
+                self.script_pos += 1
+                continue
+            if event in ("ticket", "claim"):
+                self.phase = event
+                return
+            self.script_pos += 1
+        self.phase = "done"
+
+    def _issue_ticket(self) -> bytes:
+        material = (
+            self.key
+            + b"|ticket|"
+            + str(self.slot).encode()
+            + b"|"
+            + str(self.gen).encode()
+            + b"|"
+            + self.nonce.encode()
+        )
+        self.ticket = hashlib.sha256(material).digest()[:16]
+        return self.ticket
 
     def _unwrap_nested(self, body: bytes, depth: int):
-        """
-        Unwrap exactly *depth* NEST layers and return the inner TLV sequence.
-        Returns None if nesting is insufficient.
-        """
         current = body
         for _ in range(depth):
             found_nest = False
@@ -55,81 +73,85 @@ class Lab:
         return current
 
     def _check_claim(self, body: bytes):
-        """
-        Validate a CLAIM frame and return (flag_string, is_real).
+        if self.ticket is None:
+            return self.decoy_flag
 
-        For flat cases (nest_required=0): short tags (>= 4 bytes) are
-        sufficient for real vault release.
-
-        For nested cases (nest_required >= 1): full-width tags (>= 16 bytes)
-        bound to the current generation are required for real release.
-        """
         if self.nest_required > 0:
             inner = self._unwrap_nested(body, self.nest_required)
             if inner is None:
-                return self.decoy_flag, False
+                return self.decoy_flag
         else:
             inner = body
 
         auth_tag = None
         claim_scope = None
+        ticket_val = None
         for typ, val in protocol.decode_tlvs(inner):
             if typ == protocol.TYPE_AUTH:
                 auth_tag = val
             elif typ == protocol.TYPE_CLAIM:
                 claim_scope = val.decode("utf-8", errors="replace")
+            elif typ == protocol.TYPE_TICKET:
+                ticket_val = val
 
-        if auth_tag is None or claim_scope is None:
-            return self.decoy_flag, False
-
+        if auth_tag is None or claim_scope is None or ticket_val is None:
+            return self.decoy_flag
         if claim_scope != self.scope:
-            return self.decoy_flag, False
+            return self.decoy_flag
+        if ticket_val != self.ticket:
+            return self.decoy_flag
 
-        material = self._current_material()
+        material = seal.make_material(
+            self.slot, self.gen, self.scope, self.nonce, self.ticket
+        )
         computed = seal.compute_tag(self.key, material)
 
-        if len(auth_tag) < 4:
-            return self.decoy_flag, False
-
-        if computed[: len(auth_tag)] != auth_tag:
-            return self.decoy_flag, False
-
         if self.nest_required == 0:
-            real_flag = seal.decrypt_flag(
-                self.vault_blob, self.key, self.slot, self.gen, self.scope
-            )
-            return real_flag, True
+            if len(auth_tag) < 4:
+                return self.decoy_flag
+            if computed[: len(auth_tag)] != auth_tag:
+                return self.decoy_flag
         else:
-            if len(auth_tag) >= 16:
-                real_flag = seal.decrypt_flag(
-                    self.vault_blob, self.key, self.slot, self.gen, self.scope
-                )
-                return real_flag, True
-            else:
-                return self.decoy_flag, False
+            if len(auth_tag) != 32:
+                return self.decoy_flag
+            if computed != auth_tag:
+                return self.decoy_flag
+
+        return seal.decrypt_flag(
+            self.vault_blob, self.key, self.slot, self.gen, self.scope
+        )
 
     def step(self, raw_frame: bytes) -> bytes:
-        """
-        Process one framed message and return a framed reply.
-
-        Before processing the claim, the lab runs pending script events
-        (reincarnation, etc.).
-        """
-        while self.script_pos < len(self.script):
-            event = self.script[self.script_pos]
-            if event == "reincarnate":
-                self.gen += 1
-                self.script_pos += 1
-            else:
-                self.script_pos += 1
-                break
-
+        self._advance_to_gate()
         body = protocol.decode_frame(raw_frame)
-        flag_str, is_real = self._check_claim(body)
 
-        tag = b"real" if is_real else b"decoy"
-        reply_body = (
-            protocol.encode_tlv(protocol.TYPE_NOTE, tag)
-            + protocol.encode_tlv(protocol.TYPE_REPLY, flag_str.encode("utf-8"))
+        if self.phase == "ticket":
+            notes = [
+                val
+                for typ, val in protocol.decode_tlvs(body)
+                if typ == protocol.TYPE_NOTE
+            ]
+            if notes:
+                ticket = self._issue_ticket()
+                self.script_pos += 1
+                self.phase = "run"
+                reply = protocol.encode_tlv(protocol.TYPE_TICKET, ticket)
+                return protocol.encode_frame(reply)
+            reply = protocol.encode_tlv(
+                protocol.TYPE_REPLY, self.decoy_flag.encode("utf-8")
+            )
+            return protocol.encode_frame(reply)
+
+        if self.phase == "claim":
+            flag_str = self._check_claim(body)
+            self.script_pos += 1
+            self.phase = "run"
+            reply = protocol.encode_tlv(
+                protocol.TYPE_REPLY, flag_str.encode("utf-8")
+            )
+            return protocol.encode_frame(reply)
+
+        reply = protocol.encode_tlv(
+            protocol.TYPE_REPLY, self.decoy_flag.encode("utf-8")
         )
-        return protocol.encode_frame(reply_body)
+        return protocol.encode_frame(reply)

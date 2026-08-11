@@ -1,0 +1,22 @@
+{
+  "challenge_id": "echo",
+  "slot": 15,
+  "gen": 2,
+  "nest_required": 2,
+  "key_hex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
+  "scope": "vault.read",
+  "nonces": [
+    "e0",
+    "e1",
+    "e2"
+  ],
+  "decoy_flag": "FLAG{echo_flat_habit_residue_44aa}",
+  "script": [
+    "tick",
+    "reincarnate",
+    "tick",
+    "ticket",
+    "claim"
+  ],
+  "vault_blob_hex": "7b9af99c67af36ee6ae697fb224fe612d751dc3948f802ba4921f7517d74fec00cb58aa6"
+}

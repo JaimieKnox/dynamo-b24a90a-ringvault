@@ -5,12 +5,16 @@
   "nest_required": 1,
   "key_hex": "d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3",
   "scope": "vault.read",
-  "nonce": "n1",
-  "vault_blob_hex": "8e1da00a4b7ac2d1628208cd318abcf51ba927e4db8ac91f05805527c0",
+  "nonces": [
+    "n1",
+    "n1x"
+  ],
   "decoy_flag": "FLAG{bravo_surface_level_fail_c4a8}",
   "script": [
     "reincarnate",
+    "ticket",
     "claim"
   ],
+  "vault_blob_hex": "8e1da00a4b7ac2d1628208cd318abcf51ba927e4db8ac91f05805527c0",
   "real_flag": "FLAG{bravo_nested_vault_d9b1}"
 }
