@@ -1,63 +1,73 @@
 import hashlib
 import json
 import os
+import weakref
 
 from . import protocol, seal
+
+# Instance session state is not stored as readable Lab attributes.
+_SESS: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 class Lab:
     def __init__(self, case_dir: str):
-        with open(os.path.join(case_dir, "case.json"), "r") as f:
-            self.case = json.load(f)
+        with open(os.path.join(case_dir, 'case.json'), 'r') as f:
+            case = json.load(f)
 
-        self.slot: int = self.case["slot"]
-        self.gen: int = self.case["gen"]
-        self.nest_required: int = self.case["nest_required"]
-        self.key: bytes = bytes.fromhex(self.case["key_hex"])
-        self.scope: str = self.case["scope"]
-        self.nonces: list[str] = list(self.case["nonces"])
-        self.nonce_idx: int = 0
-        self.vault_blob: bytes = bytes.fromhex(self.case["vault_blob_hex"])
-        self.decoy_flag: str = self.case["decoy_flag"]
-        self.script: list = list(self.case["script"])
-        self.script_pos: int = 0
-        self.ticket: bytes | None = None
-        self.phase: str = "run"
+        _SESS[self] = {
+            'slot': case['slot'],
+            'gen': case['gen'],
+            'nest_required': case['nest_required'],
+            'key': bytes.fromhex(case['key_hex']),
+            'scope': case['scope'],
+            'nonces': list(case['nonces']),
+            'nonce_idx': 0,
+            'vault_blob': bytes.fromhex(case['vault_blob_hex']),
+            'decoy_flag': case['decoy_flag'],
+            'script': list(case['script']),
+            'script_pos': 0,
+            'ticket': None,
+            'phase': 'run',
+        }
 
-    @property
-    def nonce(self) -> str:
-        return self.nonces[self.nonce_idx]
+    def __getattribute__(self, name: str):
+        if name.startswith('_Lab__') or name in {'_sess', '__dict__'}:
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
 
     def _advance_to_gate(self) -> None:
-        while self.script_pos < len(self.script):
-            event = self.script[self.script_pos]
-            if event == "tick":
-                self.gen += 1
-                self.script_pos += 1
+        s = _SESS[self]
+        while s['script_pos'] < len(s['script']):
+            event = s['script'][s['script_pos']]
+            if event == 'tick':
+                s['gen'] += 1
+                s['script_pos'] += 1
                 continue
-            if event == "reincarnate":
-                self.gen += 1
-                self.nonce_idx = min(self.nonce_idx + 1, len(self.nonces) - 1)
-                self.script_pos += 1
+            if event == 'reincarnate':
+                s['gen'] += 1
+                s['nonce_idx'] = min(s['nonce_idx'] + 1, len(s['nonces']) - 1)
+                s['ticket'] = None
+                s['script_pos'] += 1
                 continue
-            if event in ("ticket", "claim"):
-                self.phase = event
+            if event in ('ticket', 'claim'):
+                s['phase'] = event
                 return
-            self.script_pos += 1
-        self.phase = "done"
+            s['script_pos'] += 1
+        s['phase'] = 'done'
 
     def _issue_ticket(self) -> bytes:
+        s = _SESS[self]
         material = (
-            self.key
-            + b"|ticket|"
-            + str(self.slot).encode()
-            + b"|"
-            + str(self.gen).encode()
-            + b"|"
-            + self.nonce.encode()
+            s['key']
+            + b'|ticket|'
+            + str(s['slot']).encode()
+            + b'|'
+            + str(s['gen']).encode()
+            + b'|'
+            + s['nonces'][s['nonce_idx']].encode()
         )
-        self.ticket = hashlib.sha256(material).digest()[:16]
-        return self.ticket
+        s['ticket'] = hashlib.sha256(material).digest()[:16]
+        return s['ticket']
 
     def _unwrap_nested(self, body: bytes, depth: int):
         current = body
@@ -73,13 +83,18 @@ class Lab:
         return current
 
     def _check_claim(self, body: bytes):
-        if self.ticket is None:
-            return self.decoy_flag
+        s = _SESS[self]
+        if s['ticket'] is None:
+            return s['decoy_flag']
 
-        if self.nest_required > 0:
-            inner = self._unwrap_nested(body, self.nest_required)
+        if s['nest_required'] > 0:
+            inner = self._unwrap_nested(body, s['nest_required'])
             if inner is None:
-                return self.decoy_flag
+                return s['decoy_flag']
+            for typ, _ in protocol.decode_tlvs(body):
+                if typ != protocol.TYPE_NEST:
+                    return s['decoy_flag']
+                break
         else:
             inner = body
 
@@ -90,42 +105,45 @@ class Lab:
             if typ == protocol.TYPE_AUTH:
                 auth_tag = val
             elif typ == protocol.TYPE_CLAIM:
-                claim_scope = val.decode("utf-8", errors="replace")
+                claim_scope = val.decode('utf-8', errors='replace')
             elif typ == protocol.TYPE_TICKET:
                 ticket_val = val
 
         if auth_tag is None or claim_scope is None or ticket_val is None:
-            return self.decoy_flag
-        if claim_scope != self.scope:
-            return self.decoy_flag
-        if ticket_val != self.ticket:
-            return self.decoy_flag
+            return s['decoy_flag']
+        if claim_scope != s['scope']:
+            return s['decoy_flag']
+        if ticket_val != s['ticket']:
+            return s['decoy_flag']
 
         material = seal.make_material(
-            self.slot, self.gen, self.scope, self.nonce, self.ticket
+            s['slot'], s['gen'], s['scope'],
+            s['nonces'][s['nonce_idx']], s['ticket']
         )
-        computed = seal.compute_tag(self.key, material)
+        computed = seal.compute_tag(s['key'], material)
 
-        if self.nest_required == 0:
+        if s['nest_required'] == 0:
             if len(auth_tag) < 4:
-                return self.decoy_flag
+                return s['decoy_flag']
             if computed[: len(auth_tag)] != auth_tag:
-                return self.decoy_flag
+                return s['decoy_flag']
         else:
             if len(auth_tag) != 32:
-                return self.decoy_flag
+                return s['decoy_flag']
             if computed != auth_tag:
-                return self.decoy_flag
+                return s['decoy_flag']
 
-        return seal.decrypt_flag(
-            self.vault_blob, self.key, self.slot, self.gen, self.scope
+        return seal._decrypt_flag(
+            s['vault_blob'], s['key'], s['slot'], s['gen'],
+            s['scope'], s['ticket']
         )
 
     def step(self, raw_frame: bytes) -> bytes:
+        s = _SESS[self]
         self._advance_to_gate()
         body = protocol.decode_frame(raw_frame)
 
-        if self.phase == "ticket":
+        if s['phase'] == 'ticket':
             notes = [
                 val
                 for typ, val in protocol.decode_tlvs(body)
@@ -133,25 +151,25 @@ class Lab:
             ]
             if notes:
                 ticket = self._issue_ticket()
-                self.script_pos += 1
-                self.phase = "run"
+                s['script_pos'] += 1
+                s['phase'] = 'run'
                 reply = protocol.encode_tlv(protocol.TYPE_TICKET, ticket)
                 return protocol.encode_frame(reply)
             reply = protocol.encode_tlv(
-                protocol.TYPE_REPLY, self.decoy_flag.encode("utf-8")
+                protocol.TYPE_REPLY, s['decoy_flag'].encode('utf-8')
             )
             return protocol.encode_frame(reply)
 
-        if self.phase == "claim":
+        if s['phase'] == 'claim':
             flag_str = self._check_claim(body)
-            self.script_pos += 1
-            self.phase = "run"
+            s['script_pos'] += 1
+            s['phase'] = 'run'
             reply = protocol.encode_tlv(
-                protocol.TYPE_REPLY, flag_str.encode("utf-8")
+                protocol.TYPE_REPLY, flag_str.encode('utf-8')
             )
             return protocol.encode_frame(reply)
 
         reply = protocol.encode_tlv(
-            protocol.TYPE_REPLY, self.decoy_flag.encode("utf-8")
+            protocol.TYPE_REPLY, s['decoy_flag'].encode('utf-8')
         )
         return protocol.encode_frame(reply)

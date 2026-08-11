@@ -9,20 +9,22 @@ def make_material(slot: int, gen: int, scope: str, nonce: str, ticket: bytes) ->
     return f"{slot}|{gen}|{scope}|{nonce}|{ticket.hex()}".encode()
 
 
-def vault_keystream(key: bytes, slot: int, gen: int, scope: str) -> bytes:
+def _vault_keystream(key: bytes, slot: int, gen: int, scope: str, ticket: bytes) -> bytes:
     material = (
         str(slot).encode()
         + b"|"
         + str(gen).encode()
         + b"|"
         + scope.encode()
+        + b"|"
+        + ticket.hex().encode()
         + b"|open"
     )
     return hashlib.sha256(key + b"|" + material).digest()
 
 
-def encrypt_flag(flag: str, key: bytes, slot: int, gen: int, scope: str) -> bytes:
-    ks = vault_keystream(key, slot, gen, scope)
+def _encrypt_flag(flag: str, key: bytes, slot: int, gen: int, scope: str, ticket: bytes) -> bytes:
+    ks = _vault_keystream(key, slot, gen, scope, ticket)
     flag_bytes = flag.encode("utf-8")
     out = bytearray(len(flag_bytes))
     for i, b in enumerate(flag_bytes):
@@ -30,8 +32,8 @@ def encrypt_flag(flag: str, key: bytes, slot: int, gen: int, scope: str) -> byte
     return bytes(out)
 
 
-def decrypt_flag(blob: bytes, key: bytes, slot: int, gen: int, scope: str) -> str:
-    ks = vault_keystream(key, slot, gen, scope)
+def _decrypt_flag(blob: bytes, key: bytes, slot: int, gen: int, scope: str, ticket: bytes) -> str:
+    ks = _vault_keystream(key, slot, gen, scope, ticket)
     out = bytearray(len(blob))
     for i, b in enumerate(blob):
         out[i] = b ^ ks[i % len(ks)]

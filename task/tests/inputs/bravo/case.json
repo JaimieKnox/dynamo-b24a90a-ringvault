@@ -11,10 +11,11 @@
   ],
   "decoy_flag": "FLAG{bravo_surface_level_fail_c4a8}",
   "script": [
+    "ticket",
     "reincarnate",
     "ticket",
     "claim"
   ],
-  "vault_blob_hex": "8e1da00a4b7ac2d1628208cd318abcf51ba927e4db8ac91f05805527c0",
-  "real_flag": "FLAG{bravo_nested_vault_d9b1}"
+  "real_flag": "FLAG{bravo_nested_vault_d9b1}",
+  "vault_blob_hex": "c5322593a74d6db65bcd62cb4be7e9871325d8d16d2865e1824ece1378"
 }

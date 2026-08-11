@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import struct
@@ -46,40 +47,67 @@ def wrap_nested(inner_body, depth):
     return current
 
 
+def compute_tag(key: bytes, material: bytes) -> bytes:
+    return hashlib.sha256(key + b"|" + material).digest()
+
+
+def make_material(slot: int, gen: int, scope: str, nonce: str, ticket: bytes) -> bytes:
+    return f"{slot}|{gen}|{scope}|{nonce}|{ticket.hex()}".encode()
+
+
 def solve_case(case_dir):
     sys.path.insert(0, "/app/data")
     from ringvault.lab import Lab
-    import ringvault.seal as seal
 
     with open(os.path.join(case_dir, "case.json"), encoding="utf-8") as f:
         case = json.load(f)
 
     lab = Lab(case_dir)
-    # Ticket request. Lab advances ticks/reincarnates before the ticket gate.
-    ticket_reply = lab.step(encode_frame(encode_tlv(TYPE_NOTE, b"session")))
-    ticket = None
-    for typ, val in decode_tlvs(decode_frame(ticket_reply)):
-        if typ == TYPE_TICKET:
-            ticket = val
-    if ticket is None:
-        raise RuntimeError(f"no ticket for {case['challenge_id']}")
+    key = bytes.fromhex(case["key_hex"])
+    slot = case["slot"]
+    scope = case["scope"]
+    nonces = list(case["nonces"])
+    nest_required = case["nest_required"]
 
-    material = seal.make_material(lab.slot, lab.gen, lab.scope, lab.nonce, ticket)
-    tag = seal.compute_tag(lab.key, material)
-    if case["nest_required"] == 0:
-        tag = tag[:4]
+    gen = case["gen"]
+    nonce_idx = 0
+    live_ticket = None
 
-    inner = (
-        encode_tlv(TYPE_AUTH, tag)
-        + encode_tlv(TYPE_CLAIM, case["scope"].encode())
-        + encode_tlv(TYPE_TICKET, ticket)
-    )
-    body = wrap_nested(inner, case["nest_required"])
-    reply_frame = lab.step(encode_frame(body))
-    for typ, val in decode_tlvs(decode_frame(reply_frame)):
-        if typ == TYPE_REPLY:
-            return val.decode("utf-8")
-    raise RuntimeError(f"No REPLY for {case['challenge_id']}")
+    for event in case["script"]:
+        if event == "tick":
+            gen += 1
+        elif event == "reincarnate":
+            gen += 1
+            nonce_idx = min(nonce_idx + 1, len(nonces) - 1)
+            live_ticket = None
+        elif event == "ticket":
+            reply_data = lab.step(encode_frame(encode_tlv(TYPE_NOTE, b"session")))
+            for typ, val in decode_tlvs(decode_frame(reply_data)):
+                if typ == TYPE_TICKET:
+                    live_ticket = val
+            if live_ticket is None:
+                raise RuntimeError(f"no ticket for {case['challenge_id']}")
+        elif event == "claim":
+            if live_ticket is None:
+                raise RuntimeError(f"no live ticket at claim for {case['challenge_id']}")
+            material = make_material(slot, gen, scope, nonces[nonce_idx], live_ticket)
+            tag = compute_tag(key, material)
+            if nest_required == 0:
+                tag = tag[:4]
+
+            inner = (
+                encode_tlv(TYPE_AUTH, tag)
+                + encode_tlv(TYPE_CLAIM, scope.encode())
+                + encode_tlv(TYPE_TICKET, live_ticket)
+            )
+            body = wrap_nested(inner, nest_required)
+            reply_frame = lab.step(encode_frame(body))
+            for typ, val in decode_tlvs(decode_frame(reply_frame)):
+                if typ == TYPE_REPLY:
+                    return val.decode("utf-8")
+            raise RuntimeError(f"No REPLY for {case['challenge_id']}")
+
+    raise RuntimeError(f"script ended without claim for {case['challenge_id']}")
 
 
 def main():

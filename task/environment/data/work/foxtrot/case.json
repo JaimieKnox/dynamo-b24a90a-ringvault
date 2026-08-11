@@ -7,13 +7,16 @@
   "scope": "vault.admin",
   "nonces": [
     "f0",
-    "f1"
+    "f1",
+    "f2"
   ],
   "decoy_flag": "FLAG{foxtrot_short_tag_mirror_77cd}",
   "script": [
     "reincarnate",
     "ticket",
+    "reincarnate",
+    "ticket",
     "claim"
   ],
-  "vault_blob_hex": "3333a31432021d983f1dbdef3804b98099e85858ca928fc612ff57b02e89e5e9104f802e"
+  "vault_blob_hex": "0d0add0a0c98eeb6809ec16c848b372dcd760785e67f0a12077daf490e72b8862e76fe30"
 }

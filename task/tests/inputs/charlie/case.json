@@ -13,10 +13,11 @@
   "decoy_flag": "FLAG{charlie_shallow_trap_b2d6}",
   "script": [
     "tick",
+    "ticket",
     "reincarnate",
     "ticket",
     "claim"
   ],
-  "vault_blob_hex": "7e1dce86c74df3af2e1bc0612d30cc330a7ffe5453da840e1f90d6dc91ebc12845",
-  "real_flag": "FLAG{charlie_deep_nest_auth_f3e7}"
+  "real_flag": "FLAG{charlie_deep_nest_auth_f3e7}",
+  "vault_blob_hex": "a3cc8e665f3d5c0e2cb4b735401b7507c356711dafd13ee01e68adae271de90998"
 }

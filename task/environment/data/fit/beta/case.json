@@ -7,13 +7,16 @@
   "scope": "vault.read",
   "nonces": [
     "b0",
-    "b1"
+    "b1",
+    "b2"
   ],
   "decoy_flag": "FLAG{beta_stale_ticket_mirror_aa10}",
   "script": [
     "reincarnate",
     "ticket",
+    "reincarnate",
+    "ticket",
     "claim"
   ],
-  "vault_blob_hex": "cf8c874bba38af4310896f411a421f9eb22c266b60b786f79c8d935fcb3f304fb1bd"
+  "vault_blob_hex": "f62cd043074aeaaeaccf037b4d365f6c31599cf24958d423c1e566991c38ce0f881d"
 }

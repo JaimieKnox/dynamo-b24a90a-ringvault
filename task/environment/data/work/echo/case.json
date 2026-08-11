@@ -14,9 +14,10 @@
   "script": [
     "tick",
     "reincarnate",
-    "tick",
+    "ticket",
+    "reincarnate",
     "ticket",
     "claim"
   ],
-  "vault_blob_hex": "7b9af99c67af36ee6ae697fb224fe612d751dc3948f802ba4921f7517d74fec00cb58aa6"
+  "vault_blob_hex": "9e9e0f0240e412d42e7a7caa1cfca9efabc2d3aee258a71955b607dfcf3cbefee9b17c38"
 }
