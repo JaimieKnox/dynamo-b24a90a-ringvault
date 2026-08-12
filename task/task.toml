@@ -20,7 +20,7 @@ verification_explanation = "The agent writes /app/output/flags.json. Phase A sea
 timeout_sec = 180.0
 
 [agent]
-timeout_sec = 7200
+timeout_sec = 3600
 
 [environment]
 build_timeout_sec = 600.0
