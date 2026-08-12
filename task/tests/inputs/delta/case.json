@@ -12,15 +12,6 @@
     "n3c"
   ],
   "decoy_flag": "FLAG{delta_wrong_gen_deputy_7f3e}",
-  "script": [
-    "reincarnate",
-    "ticket",
-    "tick",
-    "reincarnate",
-    "ticket",
-    "tick",
-    "claim"
-  ],
   "real_flag": "FLAG{delta_triple_nested_reborn_8a4c}",
   "vault_blob_hex": "58fed0d90a47beec0ce56bf0979b04c012a30e8ec8401449547dc4acd1539b2826d3a5fd0c"
 }

@@ -11,15 +11,6 @@
     "e2"
   ],
   "decoy_flag": "FLAG{echo_flat_habit_residue_44aa}",
-  "script": [
-    "tick",
-    "reincarnate",
-    "ticket",
-    "reincarnate",
-    "ticket",
-    "tick",
-    "claim"
-  ],
   "real_flag": "FLAG{echo_ticket_bound_rebirth_91c2}",
   "vault_blob_hex": "657651ef3f3605af0285000e8406f8a8c22f739034aed71f443d589165ec95ec125922d5"
 }

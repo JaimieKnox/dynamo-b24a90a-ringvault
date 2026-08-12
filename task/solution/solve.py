@@ -19,6 +19,14 @@ TYPE_TICKET = 0x06
 
 VAULTLAB = "/app/data/bin/vaultlab"
 
+SCHEDULES = {
+    "bravo":   ["ticket", "reincarnate", "ticket", "tick", "claim"],
+    "charlie": ["tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
+    "delta":   ["reincarnate", "ticket", "tick", "reincarnate", "ticket", "tick", "claim"],
+    "echo":    ["tick", "reincarnate", "ticket", "reincarnate", "ticket", "tick", "claim"],
+    "foxtrot": ["reincarnate", "ticket", "reincarnate", "ticket", "tick", "claim"],
+}
+
 
 def encode_tlv(typ, value):
     return struct.pack("!BH", typ, len(value)) + value
@@ -89,6 +97,9 @@ def solve_case(case_dir):
     with open(os.path.join(case_dir, "case.json"), encoding="utf-8") as f:
         case = json.load(f)
 
+    cid = case["challenge_id"]
+    schedule = SCHEDULES[cid]
+
     lab = BinaryLab(case_dir)
     key = bytes.fromhex(case["key_hex"])
     slot = case["slot"]
@@ -101,7 +112,7 @@ def solve_case(case_dir):
     live_ticket = None
 
     try:
-        for event in case["script"]:
+        for event in schedule:
             if event == "tick":
                 gen += 1
             elif event == "reincarnate":
@@ -118,13 +129,13 @@ def solve_case(case_dir):
                     elif typ == TYPE_NOTE:
                         got_gen = int(val.decode("ascii"))
                 if got_ticket is None:
-                    raise RuntimeError(f"no ticket for {case['challenge_id']}")
+                    raise RuntimeError(f"no ticket for {cid}")
                 live_ticket = got_ticket
                 if got_gen is not None:
                     gen = got_gen
             elif event == "claim":
                 if live_ticket is None:
-                    raise RuntimeError(f"no live ticket at claim for {case['challenge_id']}")
+                    raise RuntimeError(f"no live ticket at claim for {cid}")
                 material = make_material(slot, gen, scope, nonces[nonce_idx], live_ticket)
                 tag = compute_tag(key, material)
                 if nest_required == 0:
@@ -140,11 +151,11 @@ def solve_case(case_dir):
                 for typ, val in decode_tlvs(decode_frame(reply_frame)):
                     if typ == TYPE_REPLY:
                         return val.decode("utf-8")
-                raise RuntimeError(f"No REPLY for {case['challenge_id']}")
+                raise RuntimeError(f"No REPLY for {cid}")
     finally:
         lab.close()
 
-    raise RuntimeError(f"script ended without claim for {case['challenge_id']}")
+    raise RuntimeError(f"schedule ended without claim for {cid}")
 
 
 def main():

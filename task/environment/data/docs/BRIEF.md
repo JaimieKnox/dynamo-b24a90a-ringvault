@@ -14,7 +14,7 @@ The challenge engine is a compiled binary at /app/data/bin/vaultlab. No importab
 
 Run: /app/data/bin/vaultlab CASE_DIR
 
-The binary reads case.json from CASE_DIR. It then loops on stdin/stdout, processing one protocol step per frame pair until the session script is exhausted.
+The binary reads case.json and an opaque session schedule from CASE_DIR. It then loops on stdin/stdout, processing one protocol step per frame pair until the session is exhausted.
 
 ## Frame protocol
 
@@ -32,34 +32,36 @@ Types:
 
 Send one frame to the binary stdin per step. Read one reply frame from its stdout per step. The binary has no public fields or inspectable state. All session state is internal to the process.
 
-## Scripted session timeline
+## Session schedule
 
-case.json includes a script list. The binary consumes script events across frame exchanges:
-- tick advances the live generation by one
-- reincarnate advances the live generation by one, advances the live nonce to the next entry in the case nonces list, and invalidates the current ticket
-- ticket is a gate that waits for a NOTE-bearing frame and replies with TICKET for the live identity plus a NOTE whose value is the live generation as decimal ASCII
-- claim is a gate that waits for a vault claim frame
+The binary follows an internal session schedule that is opaque to the caller. The schedule controls when identity state advances, when tickets are issued, when tickets are invalidated, and when the vault claim gate opens. Different cases have different schedules with varying structure and length.
 
-Each frame exchange consumes one gate event. Ticks and reincarnates advance automatically before the next gate. The caller must send one frame per gate event in the order they appear in the script.
+The caller must discover the session structure by probing the binary and observing reply types:
 
-Ticks may occur between a ticket issuance and a claim. The live generation at claim time includes all preceding ticks and reincarnates since the script began. A ticket remains valid across ticks but is invalidated by reincarnate. The seal tag must bind the generation that is live at claim, which may differ from the generation reported in the most recent ticket-grant NOTE if any ticks intervened. Fit pack gamma demonstrates this pattern.
+- A reply carrying TICKET plus NOTE indicates a ticket-issuance gate was consumed. The NOTE value is session data from the binary at that point.
+- A REPLY value matching decoy_flag indicates a rejected or misplaced action.
+- A REPLY value not matching decoy_flag on a claim action indicates vault release.
 
-## Ticket invalidation
+The binary may advance identity state (generation, active nonce, ticket validity) between visible gates. These internal transitions are not directly observable but affect the claim-time identity that the seal must bind.
 
-A reincarnate event always invalidates any previously issued ticket. After a reincarnate the caller must request a new ticket before claiming. Claiming with a stale or missing ticket returns a decoy. Work cases contain at least one reincarnate after an earlier ticket gate, requiring the caller to re-ticket before the final claim.
+Use disclosed fit packs to learn the binary interaction model before attacking work cases. Each fit pack teaches a distinct composition pattern. Alpha is a baseline. Beta exercises ticket lifecycle across identity changes. Gamma exercises a distinct identity binding pattern that differs from the simpler cases.
+
+## Ticket lifecycle
+
+Tickets are issued at ticket gates. A ticket may become invalid during a session if the binary rotates identity state. After invalidation the caller must request a new ticket before claiming. Claiming with a stale or missing ticket returns a decoy. Work cases contain at least one identity rotation that invalidates an earlier ticket, requiring the caller to re-ticket before the final claim.
 
 ## Identity and seal tags
 
-Live identity at claim time is slot, generation (after all preceding ticks and reincarnates), scope, and the active nonce. The seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, gen, scope, nonce, and ticket_hex joined by ASCII pipe separators, where ticket_hex is the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "slot|gen|scope|nonce|ticket_hex" with decimal slot and gen and no extra spaces.
+The seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, gen, scope, nonce, and ticket_hex joined by ASCII pipe separators, where ticket_hex is the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "slot|gen|scope|nonce|ticket_hex" with decimal slot and gen and no extra spaces.
+
+The seal must bind the live identity at claim time. The identity state at claim may differ from the state observed at ticket issuance if internal session events intervene.
 
 Vault release requires:
-1. A valid live ticket (issued after the most recent reincarnate)
+1. A valid live ticket (issued after the most recent identity rotation)
 2. A seal tag that validates for the live claim-time identity and that ticket
 3. AUTH plus CLAIM plus TICKET TLV records placed at exact nest depth (nest_required NEST layers for work challenges, zero for some fit packs)
 4. Full-digest-width (32 bytes) AUTH tag for work challenges with nest_required greater than zero
 5. Fit packs with nest_required zero may accept short AUTH tags (minimum 4 bytes)
-
-Important: the generation bound in the seal tag is the live generation at claim time. Ticket-grant replies include a NOTE with the generation at ticket issue. If any tick events run after that ticket grant, claim-time generation is higher than the ticket-grant NOTE. Fit pack gamma demonstrates ticket then tick then claim. Reusing the ticket-grant generation after a later tick returns a decoy.
 
 A successful claim returns the vault flag via REPLY. Any path that misses ticket freshness, identity binding, nest depth, or tag width returns a format-valid decoy FLAG string.
 

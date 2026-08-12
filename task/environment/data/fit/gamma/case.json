@@ -9,10 +9,5 @@
     "g0"
   ],
   "decoy_flag": "FLAG{gamma_stale_gen_trap_e7c1}",
-  "script": [
-    "ticket",
-    "tick",
-    "claim"
-  ],
   "vault_blob_hex": "0a6b0f36e499bc6efaa8aabcd3e34ae2c7a5d43ca8be842b973b11e404c2e9"
 }

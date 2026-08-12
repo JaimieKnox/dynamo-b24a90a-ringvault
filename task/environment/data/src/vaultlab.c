@@ -293,17 +293,6 @@ static int load_case(const char *case_dir, case_state *st) {
                 st->nonce_count++;
             }
             jp_expect(&jp, ']');
-        } else if (strcmp(key, "script") == 0) {
-            jp_expect(&jp, '[');
-            st->script_count = 0;
-            while (1) {
-                jp_skip_ws(&jp);
-                if (jp.pos >= jp.len || jp.data[jp.pos] == ']') break;
-                if (jp.data[jp.pos] == ',') { jp.pos++; continue; }
-                jp_read_string(&jp, st->script[st->script_count], 16);
-                st->script_count++;
-            }
-            jp_expect(&jp, ']');
         } else {
             jp_skip_ws(&jp);
             if (jp.pos < jp.len && jp.data[jp.pos] == '"') {
@@ -329,6 +318,28 @@ static int load_case(const char *case_dir, case_state *st) {
         }
     }
     free(json);
+
+    char sched_path[1024];
+    snprintf(sched_path, sizeof(sched_path), "%s/schedule.bin", case_dir);
+    FILE *sf = fopen(sched_path, "rb");
+    if (!sf) { fprintf(stderr, "cannot open %s\n", sched_path); return -1; }
+    int cb = fgetc(sf);
+    if (cb == EOF || cb < 1 || cb > MAX_SCRIPT) { fclose(sf); return -1; }
+    uint8_t sched_raw[MAX_SCRIPT];
+    size_t sched_n = (size_t)cb;
+    if (fread(sched_raw, 1, sched_n, sf) != sched_n) { fclose(sf); return -1; }
+    fclose(sf);
+    st->script_count = (int)sched_n;
+    for (int i = 0; i < (int)sched_n; i++) {
+        uint8_t code = sched_raw[i] ^ st->key[i % 32];
+        switch (code) {
+            case 0x10: strcpy(st->script[i], "tick"); break;
+            case 0x20: strcpy(st->script[i], "reincarnate"); break;
+            case 0x30: strcpy(st->script[i], "ticket"); break;
+            case 0x40: strcpy(st->script[i], "claim"); break;
+            default: fprintf(stderr, "bad schedule entry\n"); return -1;
+        }
+    }
     return 0;
 }
 

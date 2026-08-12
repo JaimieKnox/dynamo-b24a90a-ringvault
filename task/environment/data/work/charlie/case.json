@@ -11,13 +11,5 @@
     "n2b"
   ],
   "decoy_flag": "FLAG{charlie_shallow_trap_b2d6}",
-  "script": [
-    "tick",
-    "ticket",
-    "reincarnate",
-    "ticket",
-    "tick",
-    "claim"
-  ],
   "vault_blob_hex": "7e0c4727a93423bc212780ec2aad31fa996105a1d0f7994e86e88375ce6f0c8845"
 }

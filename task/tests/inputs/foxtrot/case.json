@@ -11,14 +11,6 @@
     "f2"
   ],
   "decoy_flag": "FLAG{foxtrot_short_tag_mirror_77cd}",
-  "script": [
-    "reincarnate",
-    "ticket",
-    "reincarnate",
-    "ticket",
-    "tick",
-    "claim"
-  ],
   "real_flag": "FLAG{foxtrot_clocked_nest_seal_6e0b}",
   "vault_blob_hex": "5f4bbf6dbbf35335d5dc8a400ce41ef4037d0bc30a09e5727a1f29304f8c31cc7c379c57"
 }
