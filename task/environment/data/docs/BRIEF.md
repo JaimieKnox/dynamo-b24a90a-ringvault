@@ -4,37 +4,47 @@ This document is normative for capture rules and output shape.
 
 ## Goal
 
-Capture the sealed vault flag for every challenge directory under /app/data/work/ by speaking the RingVault framed protocol to the in-process lab. Write results to /app/output/flags.json.
+Capture the sealed vault flag for every challenge directory under /app/data/work/ by speaking the RingVault framed protocol to the vaultlab binary. Write results to /app/output/flags.json.
 
 Disclosed fit packs live under /app/data/fit/ with case.json and expected/flags.json. Use them to induce closed behavior. Fit challenges are teaching only. Graded captures are the work set only.
 
-## Lab surface
+## Binary surface
 
-Import and drive /app/data/ringvault. Construct ringvault.lab.Lab(case_dir) for a challenge directory. Send one outer frame per Lab.step call. Each outer frame is a 4-byte big-endian length followed by a body of TLV records. Each TLV is a 1-byte type, a 2-byte big-endian length, and a value.
+The challenge engine is a compiled binary at /app/data/bin/vaultlab. No importable Python package or source code is shipped.
+
+Run: /app/data/bin/vaultlab CASE_DIR
+
+The binary reads case.json from CASE_DIR. It then loops on stdin/stdout, processing one protocol step per frame pair until the session script is exhausted.
+
+## Frame protocol
+
+Each message (both directions) is a length-prefixed binary frame: a 4-byte big-endian unsigned integer giving the body length, followed by that many body bytes. The body is a concatenation of TLV records.
+
+Each TLV record: 1-byte type, 2-byte big-endian value length, then value bytes.
 
 Types:
 - 0x01 AUTH (value is a seal tag)
-- 0x02 NOTE
+- 0x02 NOTE (value is arbitrary session data)
 - 0x03 NEST (value is an inner TLV sequence)
 - 0x04 CLAIM (value is the scope string)
 - 0x05 REPLY (value is a flag string)
-- 0x06 TICKET (value is a lab-issued session ticket)
+- 0x06 TICKET (value is a binary session ticket)
 
-The Lab object has no public fields. All session state is internal. Parse replies from Lab.step return bytes only.
+Send one frame to the binary stdin per step. Read one reply frame from its stdout per step. The binary has no public fields or inspectable state. All session state is internal to the process.
 
 ## Scripted session timeline
 
-case.json includes a script list. The lab consumes script events across Lab.step calls:
+case.json includes a script list. The binary consumes script events across frame exchanges:
 - tick advances the live generation by one
 - reincarnate advances the live generation by one, advances the live nonce to the next entry in the case nonces list, and invalidates the current ticket
 - ticket is a gate that waits for a NOTE-bearing frame and replies with TICKET for the live identity
 - claim is a gate that waits for a vault claim frame
 
-Each Lab.step call consumes one gate event. Ticks and reincarnates advance automatically before the next gate. The agent must call Lab.step once per gate event in the order they appear in the script.
+Each frame exchange consumes one gate event. Ticks and reincarnates advance automatically before the next gate. The caller must send one frame per gate event in the order they appear in the script.
 
 ## Ticket invalidation
 
-A reincarnate event always invalidates any previously issued ticket. After a reincarnate the agent must request a new ticket before claiming. Claiming with a stale or missing ticket returns a decoy. Work cases contain at least one reincarnate after an earlier ticket gate, requiring the agent to re-ticket before the final claim.
+A reincarnate event always invalidates any previously issued ticket. After a reincarnate the caller must request a new ticket before claiming. Claiming with a stale or missing ticket returns a decoy. Work cases contain at least one reincarnate after an earlier ticket gate, requiring the caller to re-ticket before the final claim.
 
 ## Identity and seal tags
 
@@ -51,7 +61,7 @@ A successful claim returns the vault flag via REPLY. Any path that misses ticket
 
 ## Decoys
 
-Format-valid FLAG{...} strings appear on paths that miss ticket binding, live identity, nest depth, or seal-tag width. Reply frames carry REPLY only. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the lab.
+Format-valid FLAG{...} strings appear on paths that miss ticket binding, live identity, nest depth, or seal-tag width. Reply frames carry REPLY only. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary.
 
 ## Output document
 

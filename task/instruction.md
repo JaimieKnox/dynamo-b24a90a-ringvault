@@ -1,6 +1,6 @@
 Capture sealed RingVault flags for every challenge directory under /app/data/work/. The normative contract is /app/data/docs/BRIEF.md.
 
-Drive the in-process lab package at /app/data/ringvault for each work case. The lab has no public session fields. Parse all state from Lab.step reply bytes. Disclosed fit packs with expecteds are under /app/data/fit/. Induce framing, ticket issue, ticket invalidation after reincarnate, seal-tag width, nesting, and generation-binding behavior from the brief and fit packs. Write /app/output/flags.json for the work set only.
+Drive the challenge binary at /app/data/bin/vaultlab for each work case. The binary speaks a length-prefixed frame protocol on stdin/stdout and has no inspectable internal state. Parse all session state from reply frames. Disclosed fit packs with expecteds are under /app/data/fit/. Induce framing, ticket issue, ticket invalidation after reincarnate, seal-tag width, nesting, and generation-binding behavior from the brief and fit packs. Write /app/output/flags.json for the work set only.
 
 Success criteria:
 1. /app/output/flags.json exists as an ordinary file (not a symlink).
