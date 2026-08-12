@@ -72,7 +72,7 @@ The continue must bind the live identity at the point of the ticket grant. If th
 
 ## Fail-closed locking
 
-The session uses fail-closed locking. The first failed ticket request, failed CONTINUE, or failed CLAIM attempt locks the session permanently. Once locked, all further responses from the binary are decoy flags regardless of input. The binary does not signal the lock state explicitly. The caller must construct correct seals on the first attempt. Fit packs may be restarted as new processes while learning.
+The session uses fail-closed locking. The first failed ticket request, failed CONTINUE, or failed CLAIM attempt locks the session permanently. Once locked, all further responses from the binary are decoy flags regardless of input. The binary does not signal the lock state explicitly. The caller must construct correct seals on the first attempt. Any case directory may be restarted as a fresh vaultlab process after a lock. Fit packs are for learning. Work packs are graded.
 
 ## Identity and claim seal tags
 

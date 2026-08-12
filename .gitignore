@@ -25,3 +25,7 @@ dist.tar.gz
 # verify-time seal
 **/sealed_expectations.json
 jobs/
+
+# Dynamo local Gates A–C marker (never commit)
+task/.dynamo_probe_ok
+.dynamo_probe_ok
