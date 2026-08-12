@@ -8,7 +8,6 @@ import json
 import os
 import struct
 import subprocess
-import sys
 
 TYPE_AUTH = 0x01
 TYPE_NOTE = 0x02
@@ -16,15 +15,16 @@ TYPE_NEST = 0x03
 TYPE_CLAIM = 0x04
 TYPE_REPLY = 0x05
 TYPE_TICKET = 0x06
+TYPE_CONTINUE = 0x07
 
 VAULTLAB = "/app/data/bin/vaultlab"
 
 SCHEDULES = {
-    "bravo":   ["ticket", "reincarnate", "ticket", "tick", "claim"],
-    "charlie": ["tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
-    "delta":   ["reincarnate", "ticket", "tick", "reincarnate", "ticket", "tick", "claim"],
-    "echo":    ["tick", "reincarnate", "ticket", "reincarnate", "ticket", "tick", "claim"],
-    "foxtrot": ["reincarnate", "ticket", "reincarnate", "ticket", "tick", "claim"],
+    "bravo": ["tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
+    "charlie": ["reincarnate", "tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
+    "delta": ["tick", "reincarnate", "ticket", "tick", "reincarnate", "ticket", "tick", "claim"],
+    "echo": ["tick", "reincarnate", "ticket", "reincarnate", "tick", "ticket", "tick", "claim"],
+    "foxtrot": ["tick", "tick", "reincarnate", "ticket", "reincarnate", "ticket", "tick", "claim"],
 }
 
 
@@ -64,6 +64,14 @@ def compute_tag(key: bytes, material: bytes) -> bytes:
 
 def make_material(slot: int, gen: int, scope: str, nonce: str, ticket: bytes) -> bytes:
     return f"{slot}|{gen}|{scope}|{nonce}|{ticket.hex()}".encode()
+
+
+def make_request_material(slot: int, gen: int, scope: str, nonce: str) -> bytes:
+    return f"{slot}|{gen}|{scope}|{nonce}|request".encode()
+
+
+def make_cont_material(slot: int, gen: int, nonce: str, ticket: bytes) -> bytes:
+    return f"cont|{slot}|{gen}|{nonce}|{ticket.hex()}".encode()
 
 
 class BinaryLab:
@@ -120,19 +128,23 @@ def solve_case(case_dir):
                 nonce_idx = min(nonce_idx + 1, len(nonces) - 1)
                 live_ticket = None
             elif event == "ticket":
-                reply_data = lab.step(encode_frame(encode_tlv(TYPE_NOTE, b"session")))
+                req = make_request_material(slot, gen, scope, nonces[nonce_idx])
+                tag = compute_tag(key, req)
+                if nest_required == 0:
+                    tag = tag[:4]
+                body = encode_tlv(TYPE_AUTH, tag) + encode_tlv(TYPE_NOTE, b"session")
+                reply_data = lab.step(encode_frame(body))
                 got_ticket = None
-                got_gen = None
                 for typ, val in decode_tlvs(decode_frame(reply_data)):
                     if typ == TYPE_TICKET:
                         got_ticket = val
-                    elif typ == TYPE_NOTE:
-                        got_gen = int(val.decode("ascii"))
                 if got_ticket is None:
                     raise RuntimeError(f"no ticket for {cid}")
                 live_ticket = got_ticket
-                if got_gen is not None:
-                    gen = got_gen
+
+                cont_material = make_cont_material(slot, gen, nonces[nonce_idx], live_ticket)
+                cont_tag = compute_tag(key, cont_material)
+                lab.step(encode_frame(encode_tlv(TYPE_CONTINUE, cont_tag)))
             elif event == "claim":
                 if live_ticket is None:
                     raise RuntimeError(f"no live ticket at claim for {cid}")

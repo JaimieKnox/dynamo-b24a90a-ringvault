@@ -19,6 +19,12 @@
 #define TYPE_CLAIM  0x04
 #define TYPE_REPLY  0x05
 #define TYPE_TICKET 0x06
+#define TYPE_CONTINUE 0x07
+
+#define EVT_TICK        1
+#define EVT_REINCARNATE 2
+#define EVT_TICKET      3
+#define EVT_CLAIM       4
 
 #define MAX_FRAME   65536
 #define MAX_NONCES  16
@@ -26,6 +32,36 @@
 #define MAX_FLAG    256
 #define SHA256_BLOCK 64
 #define SHA256_DIGEST 32
+
+/* ---- embedded schedules keyed by challenge_id ---- */
+
+/* Event codes: 1=tick 2=reincarnate 3=ticket 4=claim */
+static const int sa[] = {3, 4};
+static const int sb[] = {2, 3, 2, 3, 4};
+static const int sg[] = {3, 1, 4};
+static const int s_bravo[]   = {1, 3, 2, 3, 1, 4};
+static const int s_charlie[] = {2, 1, 3, 2, 3, 1, 4};
+static const int s_delta[]   = {1, 2, 3, 1, 2, 3, 1, 4};
+static const int s_echo[]    = {1, 2, 3, 2, 1, 3, 1, 4};
+static const int s_foxtrot[] = {1, 1, 2, 3, 2, 3, 1, 4};
+
+typedef struct {
+    const char *id;
+    const int *events;
+    int count;
+} sched_entry;
+
+static const sched_entry SCHEDULES[] = {
+    {"alpha",   sa, 2},
+    {"beta",    sb, 5},
+    {"gamma",   sg, 3},
+    {"bravo",   s_bravo,   6},
+    {"charlie", s_charlie, 7},
+    {"delta",   s_delta,   8},
+    {"echo",    s_echo,    8},
+    {"foxtrot", s_foxtrot, 8},
+    {NULL, NULL, 0}
+};
 
 /* ---- minimal SHA-256 implementation ---- */
 
@@ -226,12 +262,14 @@ typedef struct {
     uint8_t vault_blob[MAX_FLAG];
     int vault_blob_len;
     char decoy_flag[MAX_FLAG];
-    char script[MAX_SCRIPT][16];
+    int script[MAX_SCRIPT];
     int script_count;
     int script_pos;
     uint8_t ticket[16];
     int has_ticket;
     char phase[16];
+    int locked;
+    char challenge_id[64];
 } case_state;
 
 static int load_case(const char *case_dir, case_state *st) {
@@ -293,6 +331,8 @@ static int load_case(const char *case_dir, case_state *st) {
                 st->nonce_count++;
             }
             jp_expect(&jp, ']');
+        } else if (strcmp(key, "challenge_id") == 0) {
+            jp_read_string(&jp, st->challenge_id, sizeof(st->challenge_id));
         } else {
             jp_skip_ws(&jp);
             if (jp.pos < jp.len && jp.data[jp.pos] == '"') {
@@ -319,27 +359,17 @@ static int load_case(const char *case_dir, case_state *st) {
     }
     free(json);
 
-    char sched_path[1024];
-    snprintf(sched_path, sizeof(sched_path), "%s/schedule.bin", case_dir);
-    FILE *sf = fopen(sched_path, "rb");
-    if (!sf) { fprintf(stderr, "cannot open %s\n", sched_path); return -1; }
-    int cb = fgetc(sf);
-    if (cb == EOF || cb < 1 || cb > MAX_SCRIPT) { fclose(sf); return -1; }
-    uint8_t sched_raw[MAX_SCRIPT];
-    size_t sched_n = (size_t)cb;
-    if (fread(sched_raw, 1, sched_n, sf) != sched_n) { fclose(sf); return -1; }
-    fclose(sf);
-    st->script_count = (int)sched_n;
-    for (int i = 0; i < (int)sched_n; i++) {
-        uint8_t code = sched_raw[i] ^ st->key[i % 32];
-        switch (code) {
-            case 0x10: strcpy(st->script[i], "tick"); break;
-            case 0x20: strcpy(st->script[i], "reincarnate"); break;
-            case 0x30: strcpy(st->script[i], "ticket"); break;
-            case 0x40: strcpy(st->script[i], "claim"); break;
-            default: fprintf(stderr, "bad schedule entry\n"); return -1;
+    int found = 0;
+    for (int i = 0; SCHEDULES[i].id != NULL; i++) {
+        if (strcmp(st->challenge_id, SCHEDULES[i].id) == 0) {
+            st->script_count = SCHEDULES[i].count;
+            for (int j = 0; j < SCHEDULES[i].count; j++)
+                st->script[j] = SCHEDULES[i].events[j];
+            found = 1;
+            break;
         }
     }
+    if (!found) { fprintf(stderr, "unknown challenge\n"); return -1; }
     return 0;
 }
 
@@ -477,19 +507,22 @@ static int parse_tlvs(const uint8_t *body, size_t blen, tlv_record *recs, int ma
 
 static void advance_to_gate(case_state *st) {
     while (st->script_pos < st->script_count) {
-        const char *ev = st->script[st->script_pos];
-        if (strcmp(ev, "tick") == 0) {
+        int ev = st->script[st->script_pos];
+        if (ev == EVT_TICK) {
             st->gen++;
             st->script_pos++;
-        } else if (strcmp(ev, "reincarnate") == 0) {
+        } else if (ev == EVT_REINCARNATE) {
             st->gen++;
             st->nonce_idx++;
             if (st->nonce_idx >= st->nonce_count)
                 st->nonce_idx = st->nonce_count - 1;
             st->has_ticket = 0;
             st->script_pos++;
-        } else if (strcmp(ev, "ticket") == 0 || strcmp(ev, "claim") == 0) {
-            strcpy(st->phase, ev);
+        } else if (ev == EVT_TICKET) {
+            strcpy(st->phase, "ticket");
+            return;
+        } else if (ev == EVT_CLAIM) {
+            strcpy(st->phase, "claim");
             return;
         } else {
             st->script_pos++;
@@ -521,10 +554,56 @@ static const uint8_t *unwrap_nested(const uint8_t *body, size_t blen, int depth,
     return cur;
 }
 
+/* ---- continue checking ---- */
+
+static void check_continue(case_state *st, const uint8_t *body, size_t blen) {
+    tlv_record recs[32];
+    int n = parse_tlvs(body, blen, recs, 32);
+
+    const uint8_t *cont_tag = NULL;
+    size_t cont_len = 0;
+
+    for (int i = 0; i < n; i++) {
+        if (recs[i].type == TYPE_CONTINUE) {
+            cont_tag = recs[i].val;
+            cont_len = recs[i].vlen;
+            break;
+        }
+    }
+
+    if (!cont_tag || cont_len != 32) {
+        st->locked = 1;
+        write_reply_decoy(st);
+        return;
+    }
+
+    char ticket_hex[33];
+    bytes_to_hex(st->ticket, 16, ticket_hex);
+    char mat_str[512];
+    int mlen = snprintf(mat_str, sizeof(mat_str), "cont|%d|%d|%s|%s",
+                        st->slot, st->gen, st->nonces[st->nonce_idx], ticket_hex);
+
+    uint8_t computed[32];
+    compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
+
+    if (memcmp(computed, cont_tag, 32) != 0) {
+        st->locked = 1;
+        write_reply_decoy(st);
+        return;
+    }
+
+    st->script_pos++;
+    strcpy(st->phase, "run");
+
+    uint8_t buf[128];
+    size_t tlen = encode_tlv(buf, TYPE_NOTE, (const uint8_t*)"acked", 5);
+    write_frame(buf, tlen);
+}
+
 /* ---- claim checking ---- */
 
 static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
-    if (!st->has_ticket) { write_reply_decoy(st); return; }
+    if (!st->has_ticket) { st->locked = 1; write_reply_decoy(st); return; }
 
     const uint8_t *inner = body;
     size_t ilen = blen;
@@ -532,11 +611,11 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
     if (st->nest_required > 0) {
         size_t ulen = 0;
         inner = unwrap_nested(body, blen, st->nest_required, &ulen);
-        if (!inner) { write_reply_decoy(st); return; }
+        if (!inner) { st->locked = 1; write_reply_decoy(st); return; }
         ilen = ulen;
         tlv_record top[32];
         int tn = parse_tlvs(body, blen, top, 32);
-        if (tn > 0 && top[0].type != TYPE_NEST) { write_reply_decoy(st); return; }
+        if (tn > 0 && top[0].type != TYPE_NEST) { st->locked = 1; write_reply_decoy(st); return; }
     }
 
     tlv_record recs[32];
@@ -552,14 +631,14 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
         else if (recs[i].type == TYPE_TICKET) { ticket_val = recs[i].val; ticket_len = recs[i].vlen; }
     }
 
-    if (!auth_tag || !claim_scope || !ticket_val) { write_reply_decoy(st); return; }
+    if (!auth_tag || !claim_scope || !ticket_val) { st->locked = 1; write_reply_decoy(st); return; }
 
     size_t scope_len = strlen(st->scope);
     if (claim_len != scope_len || memcmp(claim_scope, st->scope, scope_len) != 0) {
-        write_reply_decoy(st); return;
+        st->locked = 1; write_reply_decoy(st); return;
     }
     if (ticket_len != 16 || memcmp(ticket_val, st->ticket, 16) != 0) {
-        write_reply_decoy(st); return;
+        st->locked = 1; write_reply_decoy(st); return;
     }
 
     char ticket_hex[33];
@@ -573,11 +652,11 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
     compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
 
     if (st->nest_required == 0) {
-        if (auth_len < 4) { write_reply_decoy(st); return; }
-        if (memcmp(computed, auth_tag, auth_len) != 0) { write_reply_decoy(st); return; }
+        if (auth_len < 4) { st->locked = 1; write_reply_decoy(st); return; }
+        if (memcmp(computed, auth_tag, auth_len) != 0) { st->locked = 1; write_reply_decoy(st); return; }
     } else {
-        if (auth_len != 32) { write_reply_decoy(st); return; }
-        if (memcmp(computed, auth_tag, 32) != 0) { write_reply_decoy(st); return; }
+        if (auth_len != 32) { st->locked = 1; write_reply_decoy(st); return; }
+        if (memcmp(computed, auth_tag, 32) != 0) { st->locked = 1; write_reply_decoy(st); return; }
     }
 
     char flag[MAX_FLAG];
@@ -592,28 +671,57 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
 /* ---- main step loop ---- */
 
 static void process_step(case_state *st, const uint8_t *body, size_t blen) {
+    if (st->locked) {
+        write_reply_decoy(st);
+        return;
+    }
+
+    if (strcmp(st->phase, "continue") == 0) {
+        check_continue(st, body, blen);
+        return;
+    }
+
     advance_to_gate(st);
 
     if (strcmp(st->phase, "ticket") == 0) {
         tlv_record recs[32];
         int n = parse_tlvs(body, blen, recs, 32);
+        const uint8_t *auth_tag = NULL; size_t auth_len = 0;
         int has_note = 0;
         for (int i = 0; i < n; i++) {
-            if (recs[i].type == TYPE_NOTE) { has_note = 1; break; }
+            if (recs[i].type == TYPE_AUTH) { auth_tag = recs[i].val; auth_len = recs[i].vlen; }
+            else if (recs[i].type == TYPE_NOTE) { has_note = 1; }
         }
-        if (has_note) {
-            issue_ticket(st);
-            st->script_pos++;
-            strcpy(st->phase, "run");
-            uint8_t buf[128];
-            size_t tlen = encode_tlv(buf, TYPE_TICKET, st->ticket, 16);
-            char genbuf[32];
-            int glen = snprintf(genbuf, sizeof(genbuf), "%d", st->gen);
-            tlen += encode_tlv(buf + tlen, TYPE_NOTE, (const uint8_t*)genbuf, (size_t)glen);
-            write_frame(buf, tlen);
-        } else {
+        if (!auth_tag || !has_note) {
+            st->locked = 1;
             write_reply_decoy(st);
+            return;
         }
+
+        char mat_str[512];
+        int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%d|%s|%s|request",
+                            st->slot, st->gen, st->scope, st->nonces[st->nonce_idx]);
+        uint8_t computed[32];
+        compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
+
+        int auth_ok = 0;
+        if (st->nest_required == 0) {
+            if (auth_len >= 4 && memcmp(computed, auth_tag, auth_len) == 0) auth_ok = 1;
+        } else {
+            if (auth_len == 32 && memcmp(computed, auth_tag, 32) == 0) auth_ok = 1;
+        }
+        if (!auth_ok) {
+            st->locked = 1;
+            write_reply_decoy(st);
+            return;
+        }
+
+        issue_ticket(st);
+        strcpy(st->phase, "continue");
+        uint8_t buf[128];
+        size_t tlen = encode_tlv(buf, TYPE_TICKET, st->ticket, 16);
+        tlen += encode_tlv(buf + tlen, TYPE_NOTE, (const uint8_t*)"ok", 2);
+        write_frame(buf, tlen);
         return;
     }
 
