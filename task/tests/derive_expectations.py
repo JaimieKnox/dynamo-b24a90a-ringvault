@@ -16,12 +16,12 @@ def main() -> None:
     correct_flags = capture_all_work_flags()
     expected_doc = format_output(correct_flags)
     expected_hash = hashlib.sha256(expected_doc.encode("utf-8")).hexdigest()
-    work_dir = "/app/data/work"
-    wrong_residues = all_wrong_model_residues(work_dir)
+    inputs_dir = "/tests/inputs"
+    wrong_residues = all_wrong_model_residues(inputs_dir)
     work_ids = sorted(
         name
-        for name in os.listdir(work_dir)
-        if os.path.isfile(os.path.join(work_dir, name, "case.json"))
+        for name in os.listdir(inputs_dir)
+        if os.path.isfile(os.path.join(inputs_dir, name, "case.json"))
     )
     seal = {
         "expected_document_b64": base64.b64encode(expected_doc.encode("utf-8")).decode("ascii"),

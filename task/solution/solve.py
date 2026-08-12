@@ -110,11 +110,18 @@ def solve_case(case_dir):
                 live_ticket = None
             elif event == "ticket":
                 reply_data = lab.step(encode_frame(encode_tlv(TYPE_NOTE, b"session")))
+                got_ticket = None
+                got_gen = None
                 for typ, val in decode_tlvs(decode_frame(reply_data)):
                     if typ == TYPE_TICKET:
-                        live_ticket = val
-                if live_ticket is None:
+                        got_ticket = val
+                    elif typ == TYPE_NOTE:
+                        got_gen = int(val.decode("ascii"))
+                if got_ticket is None:
                     raise RuntimeError(f"no ticket for {case['challenge_id']}")
+                live_ticket = got_ticket
+                if got_gen is not None:
+                    gen = got_gen
             elif event == "claim":
                 if live_ticket is None:
                     raise RuntimeError(f"no live ticket at claim for {case['challenge_id']}")

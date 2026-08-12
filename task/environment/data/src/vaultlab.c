@@ -594,8 +594,11 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
             issue_ticket(st);
             st->script_pos++;
             strcpy(st->phase, "run");
-            uint8_t buf[64];
+            uint8_t buf[128];
             size_t tlen = encode_tlv(buf, TYPE_TICKET, st->ticket, 16);
+            char genbuf[32];
+            int glen = snprintf(genbuf, sizeof(genbuf), "%d", st->gen);
+            tlen += encode_tlv(buf + tlen, TYPE_NOTE, (const uint8_t*)genbuf, (size_t)glen);
             write_frame(buf, tlen);
         } else {
             write_reply_decoy(st);

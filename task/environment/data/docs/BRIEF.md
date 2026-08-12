@@ -37,7 +37,7 @@ Send one frame to the binary stdin per step. Read one reply frame from its stdou
 case.json includes a script list. The binary consumes script events across frame exchanges:
 - tick advances the live generation by one
 - reincarnate advances the live generation by one, advances the live nonce to the next entry in the case nonces list, and invalidates the current ticket
-- ticket is a gate that waits for a NOTE-bearing frame and replies with TICKET for the live identity
+- ticket is a gate that waits for a NOTE-bearing frame and replies with TICKET for the live identity plus a NOTE whose value is the live generation as decimal ASCII
 - claim is a gate that waits for a vault claim frame
 
 Each frame exchange consumes one gate event. Ticks and reincarnates advance automatically before the next gate. The caller must send one frame per gate event in the order they appear in the script.
@@ -48,7 +48,7 @@ A reincarnate event always invalidates any previously issued ticket. After a rei
 
 ## Identity and seal tags
 
-Live identity at claim time is slot, generation (after all preceding ticks and reincarnates), scope, and the active nonce. A seal tag covers material slot|gen|scope|nonce|ticket_hex under the case key (HMAC-like SHA-256 prefix construction), where ticket_hex is the lowercase hex of the most recently issued ticket bytes.
+Live identity at claim time is slot, generation (after all preceding ticks and reincarnates), scope, and the active nonce. Prefer the generation echoed in the most recent ticket-grant NOTE over a purely local count when both are available. A seal tag covers material slot|gen|scope|nonce|ticket_hex under the case key (HMAC-like SHA-256 prefix construction), where ticket_hex is the lowercase hex of the most recently issued ticket bytes.
 
 Vault release requires:
 1. A valid live ticket (issued after the most recent reincarnate)
@@ -61,7 +61,7 @@ A successful claim returns the vault flag via REPLY. Any path that misses ticket
 
 ## Decoys
 
-Format-valid FLAG{...} strings appear on paths that miss ticket binding, live identity, nest depth, or seal-tag width. Reply frames carry REPLY only. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary.
+Format-valid FLAG{...} strings appear on paths that miss ticket binding, live identity, nest depth, or seal-tag width. Claim success frames carry REPLY only. Ticket-grant frames carry TICKET plus a generation NOTE. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary.
 
 ## Output document
 
