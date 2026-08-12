@@ -20,10 +20,10 @@ TYPE_CONTINUE = 0x07
 VAULTLAB = "/app/data/bin/vaultlab"
 
 SCHEDULES = {
-    "bravo": ["tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
-    "charlie": ["reincarnate", "tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
-    "delta": ["tick", "reincarnate", "ticket", "tick", "reincarnate", "ticket", "tick", "claim"],
-    "echo": ["tick", "reincarnate", "ticket", "reincarnate", "tick", "ticket", "tick", "claim"],
+    "bravo": ['tick', 'hold', 'ticket', 'reincarnate', 'hold', 'ticket', 'tick', 'hold', 'tick', 'tick', 'claim'],
+    "charlie": ['hold', 'reincarnate', 'tick', 'ticket', 'hold', 'reincarnate', 'ticket', 'tick', 'hold', 'tick', 'claim'],
+    "delta": ['tick', 'hold', 'reincarnate', 'ticket', 'tick', 'hold', 'reincarnate', 'ticket', 'tick', 'hold', 'tick', 'claim'],
+    "echo": ['hold', 'tick', 'reincarnate', 'ticket', 'reincarnate', 'hold', 'tick', 'ticket', 'tick', 'hold', 'tick', 'claim'],
 }
 
 
@@ -126,6 +126,14 @@ def solve_case(case_dir):
                 gen += 1
                 nonce_idx = min(nonce_idx + 1, len(nonces) - 1)
                 live_ticket = None
+            elif event == "hold":
+                reply_data = lab.step(encode_frame(encode_tlv(TYPE_NOTE, b"hold")))
+                held = False
+                for typ, val in decode_tlvs(decode_frame(reply_data)):
+                    if typ == TYPE_NOTE and val == b"held":
+                        held = True
+                if not held:
+                    raise RuntimeError(f"hold gate failed for {cid}")
             elif event == "ticket":
                 req = make_request_material(slot, gen, scope, nonces[nonce_idx])
                 tag = compute_tag(key, req)

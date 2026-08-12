@@ -12,5 +12,5 @@
   ],
   "decoy_flag": "FLAG{charlie_shallow_trap_b2d6}",
   "real_flag": "FLAG{charlie_deep_nest_auth_f3e7}",
-  "vault_blob_hex": "cabce3f257cc589e367fb14581b956998e86983af3e684cae206b5efae4da122f1"
+  "vault_blob_hex": "09403fa906dc5146aa3fccfbb6f431da5f9483366b6e9fed1669259504fc67cd32"
 }

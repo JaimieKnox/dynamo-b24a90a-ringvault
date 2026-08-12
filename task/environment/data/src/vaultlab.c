@@ -25,6 +25,7 @@
 #define EVT_REINCARNATE 2
 #define EVT_TICKET      3
 #define EVT_CLAIM       4
+#define EVT_HOLD        5
 
 #define MAX_FRAME   65536
 #define MAX_NONCES  16
@@ -35,14 +36,14 @@
 
 /* ---- embedded schedules keyed by challenge_id ---- */
 
-/* Event codes: 1=tick 2=reincarnate 3=ticket 4=claim */
+/* Event codes: 1=tick 2=reincarnate 3=ticket 4=claim 5=hold */
 static const int sa[] = {3, 4};
 static const int sb[] = {2, 3, 2, 3, 4};
 static const int sg[] = {3, 1, 4};
-static const int s_bravo[]   = {1, 3, 2, 3, 1, 4};
-static const int s_charlie[] = {2, 1, 3, 2, 3, 1, 4};
-static const int s_delta[]   = {1, 2, 3, 1, 2, 3, 1, 4};
-static const int s_echo[]    = {1, 2, 3, 2, 1, 3, 1, 4};
+static const int s_bravo[]   = {1, 5, 3, 2, 5, 3, 1, 5, 1, 1, 4};
+static const int s_charlie[] = {5, 2, 1, 3, 5, 2, 3, 1, 5, 1, 4};
+static const int s_delta[]   = {1, 5, 2, 3, 1, 5, 2, 3, 1, 5, 1, 4};
+static const int s_echo[]    = {5, 1, 2, 3, 2, 5, 1, 3, 1, 5, 1, 4};
 
 typedef struct {
     const char *id;
@@ -54,10 +55,10 @@ static const sched_entry SCHEDULES[] = {
     {"alpha",   sa, 2},
     {"beta",    sb, 5},
     {"gamma",   sg, 3},
-    {"bravo",   s_bravo,   6},
-    {"charlie", s_charlie, 7},
-    {"delta",   s_delta,   8},
-    {"echo",    s_echo,    8},
+    {"bravo",   s_bravo,   11},
+    {"charlie", s_charlie, 11},
+    {"delta",   s_delta,   12},
+    {"echo",    s_echo,    12},
     {NULL, NULL, 0}
 };
 
@@ -412,6 +413,10 @@ static void write_reply_decoy(case_state *st) {
 
 /* ---- crypto ---- */
 
+/* Binary-only vault salt: never printed, never in case.json / BRIEF. */
+static const uint8_t VAULT_SALT[16] = { 0x6b, 0x2e, 0x91, 0xc4, 0x57, 0xa8, 0x3d, 0xf0, 0x1c, 0x9b, 0x44, 0xe7, 0x82, 0x5a, 0xd6, 0x0f };
+
+
 static void compute_tag(const uint8_t *key, const uint8_t *material, size_t mlen, uint8_t out[32]) {
     uint8_t tmp[4096];
     size_t tlen = 0;
@@ -435,6 +440,7 @@ static void issue_ticket(case_state *st) {
     material[mlen++] = '|';
     size_t nlen = strlen(st->nonces[st->nonce_idx]);
     memcpy(material + mlen, st->nonces[st->nonce_idx], nlen); mlen += nlen;
+    memcpy(material + mlen, VAULT_SALT, 16); mlen += 16;
 
     uint8_t hash[32];
     sha256(material, mlen, hash);
@@ -462,6 +468,7 @@ static void vault_keystream(case_state *st, uint8_t ks[32]) {
     material[mlen++] = '|';
     memcpy(material + mlen, ticket_hex, 32); mlen += 32;
     memcpy(material + mlen, "|open", 5); mlen += 5;
+    memcpy(material + mlen, VAULT_SALT, 16); mlen += 16;
 
     sha256(material, mlen, ks);
 }
@@ -521,6 +528,9 @@ static void advance_to_gate(case_state *st) {
             return;
         } else if (ev == EVT_CLAIM) {
             strcpy(st->phase, "claim");
+            return;
+        } else if (ev == EVT_HOLD) {
+            strcpy(st->phase, "hold");
             return;
         } else {
             st->script_pos++;
@@ -680,6 +690,27 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
     }
 
     advance_to_gate(st);
+
+
+    if (strcmp(st->phase, "hold") == 0) {
+        tlv_record recs[32];
+        int n = parse_tlvs(body, blen, recs, 32);
+        int has_note = 0;
+        for (int i = 0; i < n; i++) {
+            if (recs[i].type == TYPE_NOTE) { has_note = 1; break; }
+        }
+        if (!has_note) {
+            st->locked = 1;
+            write_reply_decoy(st);
+            return;
+        }
+        st->script_pos++;
+        strcpy(st->phase, "run");
+        uint8_t buf[128];
+        size_t tlen = encode_tlv(buf, TYPE_NOTE, (const uint8_t*)"held", 4);
+        write_frame(buf, tlen);
+        return;
+    }
 
     if (strcmp(st->phase, "ticket") == 0) {
         tlv_record recs[32];

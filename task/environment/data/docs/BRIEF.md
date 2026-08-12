@@ -37,12 +37,13 @@ Send one frame to the binary stdin per step. Read one reply frame from its stdou
 
 The binary follows an internal session schedule embedded in the compiled binary, keyed by the challenge_id from case.json. Session schedules are not stored as files in case directories and cannot be extracted from case data. The schedule controls when identity state advances, when tickets are issued, when tickets are invalidated, and when the vault claim gate opens. Different cases have different schedules with varying structure and length. Graded work schedules are not identical to any disclosed fit pack.
 
-Induce session structure from the disclosed fit packs and this brief. Fit packs teach composition patterns. Work packs retain held schedule residue. Blind exhaustive probing is a poor strategy because failed ticket requests, failed continues, and failed claims lock the session.
+Induce session structure from the disclosed fit packs and this brief. Fit packs teach composition patterns. Work packs retain held schedule residue. Blind exhaustive probing is a poor strategy because failed ticket requests, failed holds, failed continues, and failed claims lock the session.
 
 Observable replies under a correct planned path:
 
 - A reply carrying TICKET plus NOTE indicates a ticket-issuance gate was consumed. The NOTE value on ticket grants is the opaque string "ok" and does not reveal identity state.
 - A reply carrying NOTE with value "acked" indicates a continue binding was accepted.
+- A reply carrying NOTE with value "held" indicates a hold gate was accepted.
 - A REPLY value matching decoy_flag indicates a rejected or misplaced action.
 - A REPLY value not matching decoy_flag on a claim action indicates vault release.
 
@@ -62,6 +63,11 @@ Fit packs with nest_required zero may accept a short request AUTH tag (minimum 4
 
 Tickets are issued at ticket gates after a valid request seal. A ticket may become invalid during a session if the binary rotates identity state. After invalidation the caller must request a new ticket before claiming. Claiming with a stale or missing ticket returns a decoy. Work cases contain at least one identity rotation that invalidates an earlier ticket, requiring the caller to re-ticket before the final claim.
 
+
+## Hold gate
+
+Some sessions include hold gates. A hold gate is not present in the disclosed fit packs. When the schedule reaches a hold gate the binary enters a hold phase. The caller must send a frame that contains a NOTE TLV. On success the binary replies with NOTE value "held" and then advances the schedule. A missing or wrong-shaped hold frame (no NOTE) permanently locks the session and returns a decoy. Work sessions may use hold composition that is not present in fit packs. Graded work schedules are not listed here.
+
 ## Continue binding
 
 After every successful ticket grant, the binary enters a continue phase. The caller must send a CONTINUE frame (TLV type 0x07) with a 32-byte continue seal tag before the session schedule will advance past the ticket event. The full 32-byte tag is required for all cases, including fit packs.
@@ -72,7 +78,7 @@ The continue must bind the live identity at the point of the ticket grant. If th
 
 ## Fail-closed locking
 
-The session uses fail-closed locking. The first failed ticket request, failed CONTINUE, or failed CLAIM attempt locks the session permanently. Once locked, all further responses from the binary are decoy flags regardless of input. The binary does not signal the lock state explicitly. The caller must construct correct seals on the first attempt. Any case directory may be restarted as a fresh vaultlab process after a lock. Fit packs are for learning. Work packs are graded.
+The session uses fail-closed locking. The first failed ticket request, failed hold, failed CONTINUE, or failed CLAIM attempt locks the session permanently. Once locked, all further responses from the binary are decoy flags regardless of input. The binary does not signal the lock state explicitly. The caller must construct correct seals on the first attempt. Any case directory may be restarted as a fresh vaultlab process after a lock. Fit packs are for learning. Work packs are graded.
 
 ## Identity and claim seal tags
 
@@ -94,7 +100,7 @@ A successful claim returns the vault flag via REPLY. Any path that misses ticket
 
 ## Decoys
 
-Format-valid FLAG{...} strings appear on paths that miss ticket binding, request seal, continue binding, live identity, nest depth, or seal-tag width. Claim success frames carry REPLY only. Ticket-grant frames carry TICKET plus an opaque NOTE. Continue success frames carry NOTE only. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary. Compare REPLY against the case decoy_flag to distinguish success from failure when probing fit packs.
+Format-valid FLAG{...} strings appear on paths that miss ticket binding, request seal, continue binding, live identity, nest depth, or seal-tag width. Claim success frames carry REPLY only. Ticket-grant frames carry TICKET plus an opaque NOTE. Continue success frames carry NOTE only. Hold success frames carry NOTE with value held. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary. Vault keystream and tickets bind an engine-internal secret that is not present in case.json. Compare REPLY against the case decoy_flag to distinguish success from failure when probing fit packs.
 
 ## Output document
 

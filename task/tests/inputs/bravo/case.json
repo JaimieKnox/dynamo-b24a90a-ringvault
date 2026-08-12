@@ -11,5 +11,5 @@
   ],
   "decoy_flag": "FLAG{bravo_surface_level_fail_c4a8}",
   "real_flag": "FLAG{bravo_nested_vault_d9b1}",
-  "vault_blob_hex": "eebf6f880efbe8112e5d72d5ed570f91037143bf7a75a974c7ec22d5a7"
+  "vault_blob_hex": "7d5e5f623a76c5b847ba03e8b3751177328dbe13afcef0a7ae520fc8f8"
 }
