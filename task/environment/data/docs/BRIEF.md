@@ -48,7 +48,7 @@ A reincarnate event always invalidates any previously issued ticket. After a rei
 
 ## Identity and seal tags
 
-Live identity at claim time is slot, generation (after all preceding ticks and reincarnates), scope, and the active nonce. Prefer the generation echoed in the most recent ticket-grant NOTE over a purely local count when both are available. A seal tag covers material slot|gen|scope|nonce|ticket_hex under the case key (HMAC-like SHA-256 prefix construction), where ticket_hex is the lowercase hex of the most recently issued ticket bytes.
+Live identity at claim time is slot, generation (after all preceding ticks and reincarnates), scope, and the active nonce. Prefer the generation echoed in the most recent ticket-grant NOTE over a purely local count when both are available. The seal tag is SHA-256 of the 32 raw key bytes, then a single ASCII `|` byte, then the ASCII material `slot|gen|scope|nonce|ticket_hex`, where ticket_hex is the lowercase hex of the most recently issued ticket bytes.
 
 Vault release requires:
 1. A valid live ticket (issued after the most recent reincarnate)
