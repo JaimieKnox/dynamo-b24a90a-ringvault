@@ -43,7 +43,6 @@ static const int s_bravo[]   = {1, 3, 2, 3, 1, 4};
 static const int s_charlie[] = {2, 1, 3, 2, 3, 1, 4};
 static const int s_delta[]   = {1, 2, 3, 1, 2, 3, 1, 4};
 static const int s_echo[]    = {1, 2, 3, 2, 1, 3, 1, 4};
-static const int s_foxtrot[] = {1, 1, 2, 3, 2, 3, 1, 4};
 
 typedef struct {
     const char *id;
@@ -59,7 +58,6 @@ static const sched_entry SCHEDULES[] = {
     {"charlie", s_charlie, 7},
     {"delta",   s_delta,   8},
     {"echo",    s_echo,    8},
-    {"foxtrot", s_foxtrot, 8},
     {NULL, NULL, 0}
 };
 

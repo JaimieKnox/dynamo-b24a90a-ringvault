@@ -24,7 +24,6 @@ SCHEDULES = {
     "charlie": ["reincarnate", "tick", "ticket", "reincarnate", "ticket", "tick", "claim"],
     "delta": ["tick", "reincarnate", "ticket", "tick", "reincarnate", "ticket", "tick", "claim"],
     "echo": ["tick", "reincarnate", "ticket", "reincarnate", "tick", "ticket", "tick", "claim"],
-    "foxtrot": ["tick", "tick", "reincarnate", "ticket", "reincarnate", "ticket", "tick", "claim"],
 }
 
 
