@@ -6,11 +6,6 @@
   "nest_required": 0,
   "key_hex": "bb11cc22dd33ee44ff5566778899aabbbb11cc22dd33ee44ff5566778899aabb",
   "scope": "vault.read",
-  "nonces": [
-    "b0",
-    "b1",
-    "b2"
-  ],
   "decoy_flag": "FLAG{beta_stale_ticket_mirror_aa10}",
-  "vault_blob_hex": "ce3f684ffd430d821296041bbca83e3232e005ef3b6652eb8251"
+  "vault_blob_hex": "70f11a3069f29a06759fece6922179946480466314b657fb0e33"
 }

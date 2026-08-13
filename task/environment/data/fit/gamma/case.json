@@ -6,9 +6,6 @@
   "nest_required": 0,
   "key_hex": "c4d5e6f708192a3b4c5d6e7f80a1b2c3c4d5e6f708192a3b4c5d6e7f80a1b2c3",
   "scope": "vault.read",
-  "nonces": [
-    "g0"
-  ],
   "decoy_flag": "FLAG{gamma_stale_gen_trap_e7c1}",
-  "vault_blob_hex": "0676bb26d60e69fc4bf1e252c3f0dd8a539188b5831a82c43cccf3"
+  "vault_blob_hex": "d1995d34b4cf90ac259dce7b6fe95fc1f88ceceffe446b47a51089"
 }

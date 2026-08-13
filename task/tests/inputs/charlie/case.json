@@ -1,17 +1,12 @@
 {
   "challenge_id": "charlie",
-  "sched_hex": "7fc4252651723d49e52cf40d",
+  "sched_hex": "7fb5542651034c49e52cf40d",
   "slot": 3,
   "gen": 1,
   "nest_required": 2,
   "key_hex": "1a2b3c4d5e6f708192a3b4c5d6e7f80a1a2b3c4d5e6f708192a3b4c5d6e7f80a",
   "scope": "vault.admin",
-  "nonces": [
-    "n2",
-    "n2a",
-    "n2b"
-  ],
   "decoy_flag": "FLAG{charlie_shallow_trap_b2d6}",
   "real_flag": "FLAG{charlie_deep_nest_auth_f3e7}",
-  "vault_blob_hex": "09403fa906dc5146aa3fccfbb6f431da5f9483366b6e9fed1669259504fc67cd32"
+  "vault_blob_hex": "181b4c70c280ba82e2580d752b891e18b2ecabce99850a5eef442fda15d6f84f23"
 }

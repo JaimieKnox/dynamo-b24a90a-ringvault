@@ -1,16 +1,12 @@
 {
   "challenge_id": "bravo",
-  "sched_hex": "8dcd589b130f0f1c6beb5a38",
+  "sched_hex": "8d81149b134369366beb5a38",
   "slot": 12,
   "gen": 1,
   "nest_required": 1,
   "key_hex": "d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3",
   "scope": "vault.read",
-  "nonces": [
-    "n1",
-    "n1x"
-  ],
   "decoy_flag": "FLAG{bravo_surface_level_fail_c4a8}",
   "real_flag": "FLAG{bravo_nested_vault_d9b1}",
-  "vault_blob_hex": "7d5e5f623a76c5b847ba03e8b3751177328dbe13afcef0a7ae520fc8f8"
+  "vault_blob_hex": "94f97d8b7aaf97c0a82962c2df5460a8215f37768c19f679434037e422"
 }

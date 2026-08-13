@@ -20,6 +20,7 @@
 #define TYPE_REPLY  0x05
 #define TYPE_TICKET 0x06
 #define TYPE_CONTINUE 0x07
+#define TYPE_HOLD_SEAL 0x08
 
 #define EVT_TICK        1
 #define EVT_REINCARNATE 2
@@ -225,6 +226,26 @@ static void fill_vault_salt(uint8_t out[16]);
 static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
                             int *out_events, int *out_count);
 
+/* ---- nonce derivation (engine-internal) ---- */
+
+static void derive_nonce(const char *challenge_id, int nonce_idx,
+                         char out[17]) {
+    uint8_t salt[16];
+    fill_vault_salt(salt);
+    uint8_t material[256];
+    size_t mlen = 0;
+    memcpy(material, salt, 16); mlen += 16;
+    size_t idlen = strlen(challenge_id);
+    memcpy(material + mlen, challenge_id, idlen); mlen += idlen;
+    material[mlen++] = '|';
+    char idx_str[16];
+    int n = snprintf(idx_str, sizeof(idx_str), "%d", nonce_idx);
+    memcpy(material + mlen, idx_str, n); mlen += n;
+    uint8_t hash[32];
+    sha256(material, mlen, hash);
+    bytes_to_hex(hash, 8, out);
+}
+
 /* ---- case state ---- */
 
 typedef struct {
@@ -233,8 +254,6 @@ typedef struct {
     int nest_required;
     uint8_t key[32];
     char scope[128];
-    char nonces[MAX_NONCES][128];
-    int nonce_count;
     int nonce_idx;
     uint8_t vault_blob[MAX_FLAG];
     int vault_blob_len;
@@ -299,17 +318,6 @@ static int load_case(const char *case_dir, case_state *st) {
         } else if (strcmp(key, "vault_blob_hex") == 0) {
             jp_read_string(&jp, val, sizeof(val));
             st->vault_blob_len = hex_to_bytes(val, st->vault_blob, MAX_FLAG);
-        } else if (strcmp(key, "nonces") == 0) {
-            jp_expect(&jp, '[');
-            st->nonce_count = 0;
-            while (1) {
-                jp_skip_ws(&jp);
-                if (jp.pos >= jp.len || jp.data[jp.pos] == ']') break;
-                if (jp.data[jp.pos] == ',') { jp.pos++; continue; }
-                jp_read_string(&jp, st->nonces[st->nonce_count], 128);
-                st->nonce_count++;
-            }
-            jp_expect(&jp, ']');
         } else if (strcmp(key, "challenge_id") == 0) {
             jp_read_string(&jp, st->challenge_id, sizeof(st->challenge_id));
         } else if (strcmp(key, "sched_hex") == 0) {
@@ -473,6 +481,8 @@ static void compute_tag(const uint8_t *key, const uint8_t *material, size_t mlen
 static void issue_ticket(case_state *st) {
     uint8_t salt[16];
     fill_vault_salt(salt);
+    char nonce[17];
+    derive_nonce(st->challenge_id, st->nonce_idx, nonce);
     uint8_t material[512];
     size_t mlen = 0;
     memcpy(material, st->key, 32); mlen += 32;
@@ -484,8 +494,8 @@ static void issue_ticket(case_state *st) {
     n = snprintf(num, sizeof(num), "%d", st->gen);
     memcpy(material + mlen, num, n); mlen += n;
     material[mlen++] = '|';
-    size_t nlen = strlen(st->nonces[st->nonce_idx]);
-    memcpy(material + mlen, st->nonces[st->nonce_idx], nlen); mlen += nlen;
+    size_t nlen = strlen(nonce);
+    memcpy(material + mlen, nonce, nlen); mlen += nlen;
     memcpy(material + mlen, salt, 16); mlen += 16;
 
     uint8_t hash[32];
@@ -567,8 +577,6 @@ static void advance_to_gate(case_state *st) {
         } else if (ev == EVT_REINCARNATE) {
             st->gen++;
             st->nonce_idx++;
-            if (st->nonce_idx >= st->nonce_count)
-                st->nonce_idx = st->nonce_count - 1;
             st->has_ticket = 0;
             st->script_pos++;
         } else if (ev == EVT_TICKET) {
@@ -636,8 +644,7 @@ static void check_continue(case_state *st, const uint8_t *body, size_t blen) {
     char ticket_hex[33];
     bytes_to_hex(st->ticket, 16, ticket_hex);
     char mat_str[512];
-    int mlen = snprintf(mat_str, sizeof(mat_str), "cont|%d|%d|%s|%s",
-                        st->slot, st->gen, st->nonces[st->nonce_idx], ticket_hex);
+    int mlen = snprintf(mat_str, sizeof(mat_str), "cont|%s", ticket_hex);
 
     uint8_t computed[32];
     compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
@@ -700,9 +707,8 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
     char ticket_hex[33];
     bytes_to_hex(st->ticket, 16, ticket_hex);
     char mat_str[512];
-    int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%d|%s|%s|%s",
-                        st->slot, st->gen, st->scope,
-                        st->nonces[st->nonce_idx], ticket_hex);
+    int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%s|%s",
+                        st->slot, st->scope, ticket_hex);
 
     uint8_t computed[32];
     compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
@@ -743,11 +749,32 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
     if (strcmp(st->phase, "hold") == 0) {
         tlv_record recs[32];
         int n = parse_tlvs(body, blen, recs, 32);
-        int has_note = 0;
+        const uint8_t *hold_tag = NULL;
+        size_t hold_len = 0;
         for (int i = 0; i < n; i++) {
-            if (recs[i].type == TYPE_NOTE) { has_note = 1; break; }
+            if (recs[i].type == TYPE_HOLD_SEAL) {
+                hold_tag = recs[i].val;
+                hold_len = recs[i].vlen;
+                break;
+            }
         }
-        if (!has_note) {
+        if (!hold_tag || hold_len != 32) {
+            st->locked = 1;
+            write_reply_decoy(st);
+            return;
+        }
+        char hold_mat[128];
+        int hlen;
+        if (st->has_ticket) {
+            char th[33];
+            bytes_to_hex(st->ticket, 16, th);
+            hlen = snprintf(hold_mat, sizeof(hold_mat), "hold|%s", th);
+        } else {
+            hlen = snprintf(hold_mat, sizeof(hold_mat), "hold|-");
+        }
+        uint8_t computed[32];
+        compute_tag(st->key, (const uint8_t*)hold_mat, (size_t)hlen, computed);
+        if (memcmp(computed, hold_tag, 32) != 0) {
             st->locked = 1;
             write_reply_decoy(st);
             return;
@@ -776,8 +803,8 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
         }
 
         char mat_str[512];
-        int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%d|%s|%s|request",
-                            st->slot, st->gen, st->scope, st->nonces[st->nonce_idx]);
+        int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%s|request",
+                            st->slot, st->scope);
         uint8_t computed[32];
         compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
 

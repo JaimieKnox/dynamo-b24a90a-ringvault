@@ -6,7 +6,7 @@ This document is normative for capture rules and output shape.
 
 Capture the sealed vault flag for every challenge directory under /app/data/work/ by speaking the RingVault framed protocol to the vaultlab binary. Write results to /app/output/flags.json.
 
-Disclosed fit packs live under /app/data/fit/ with case.json. Use them to induce closed behavior by carefully exercising the binary and comparing REPLY values against the case decoy_flag field. A REPLY that matches decoy_flag means the action was rejected (wrong AUTH tag, stale ticket, wrong nest depth, missing continue binding, or missing request seal). A REPLY that differs from decoy_flag means the claim succeeded. Fit challenges are teaching only. Graded captures are the work set only.
+Disclosed fit packs live under /app/data/fit/ with case.json. Use them to induce closed behavior by carefully exercising the binary and comparing REPLY values against the case decoy_flag field. A REPLY that matches decoy_flag means the action was rejected (wrong AUTH tag, stale ticket, wrong nest depth, missing continue binding, or missing hold seal). A REPLY that differs from decoy_flag means the claim succeeded. Fit challenges are teaching only. Graded captures are the work set only.
 
 ## Binary surface
 
@@ -30,6 +30,7 @@ Types:
 - 0x05 REPLY (value is a flag string)
 - 0x06 TICKET (value is a binary session ticket)
 - 0x07 CONTINUE (value is a 32-byte continue seal tag)
+- 0x08 HOLD_SEAL (value is a 32-byte hold seal tag)
 
 Send one frame to the binary stdin per step. Read one reply frame from its stdout per step. The binary has no public fields or inspectable state. All session state is internal to the process.
 
@@ -47,7 +48,7 @@ Observable replies under a correct planned path:
 - A REPLY value matching decoy_flag indicates a rejected or misplaced action.
 - A REPLY value not matching decoy_flag on a claim action indicates vault release.
 
-The binary may advance identity state (generation, active nonce, ticket validity) between visible gates. These internal transitions are not directly observable but affect the claim-time identity that the seal must bind. Model the current generation and nonce index by tracking how internal schedule events (ticks, reincarnations) modify identity from the starting values in case.json.
+The binary may advance identity state (generation, active nonce, ticket validity) between visible gates. These internal transitions are not directly observable but affect ticket issuance and vault release. The active nonce for each identity epoch is derived engine-internally and is not listed in case.json. Model the current identity epoch by tracking how internal schedule events (ticks, reincarnations) modify identity from the starting values in case.json.
 
 Each fit pack teaches a distinct composition pattern. Alpha is a baseline ticket then claim. Beta exercises ticket lifecycle across identity changes. Gamma exercises a post-ticket identity advance before claim.
 
@@ -55,7 +56,7 @@ Each fit pack teaches a distinct composition pattern. Alpha is a baseline ticket
 
 Ticket gates do not accept a bare NOTE. The caller must send AUTH plus NOTE in one frame. The AUTH value is a request seal tag.
 
-The request seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, gen, scope, nonce, and the literal word request joined by ASCII pipe separators. Example shape: key_bytes + "|" + "slot|gen|scope|nonce|request" with decimal slot and gen and no extra spaces.
+The request seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, scope, and the literal word request joined by ASCII pipe separators. Example shape: key_bytes + "|" + "slot|scope|request" with decimal slot and no extra spaces.
 
 Fit packs with nest_required zero may accept a short request AUTH tag (minimum 4 bytes prefix of the digest). Work challenges with nest_required greater than zero require the full 32-byte request AUTH tag.
 
@@ -63,18 +64,19 @@ Fit packs with nest_required zero may accept a short request AUTH tag (minimum 4
 
 Tickets are issued at ticket gates after a valid request seal. A ticket may become invalid during a session if the binary rotates identity state. After invalidation the caller must request a new ticket before claiming. Claiming with a stale or missing ticket returns a decoy. Work cases contain at least one identity rotation that invalidates an earlier ticket, requiring the caller to re-ticket before the final claim.
 
+Tickets are opaque binary values issued by the engine. The ticket bytes bind internal engine state (including the binary-only salt, current generation, and active nonce at issuance time). The caller cannot forge or predict ticket bytes without driving the binary.
 
 ## Hold gate
 
-Some sessions include hold gates. A hold gate is not present in the disclosed fit packs. When the schedule reaches a hold gate the binary enters a hold phase. The caller must send a frame that contains a NOTE TLV. On success the binary replies with NOTE value "held" and then advances the schedule. A missing or wrong-shaped hold frame (no NOTE) permanently locks the session and returns a decoy. Work sessions may use hold composition that is not present in fit packs. Graded work schedules are not listed here.
+Some sessions include hold gates. A hold gate is not present in the disclosed fit packs. When the schedule reaches a hold gate the binary enters a hold phase. The caller must send a frame that contains a HOLD_SEAL TLV (type 0x08) with a 32-byte hold seal tag. The hold seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The hold material string is the literal "hold" followed by a pipe and the lowercase hex encoding of the live ticket bytes, or a literal dash "-" if no ticket is currently live. Example shapes: key_bytes + "|" + "hold|ticket_hex" when a live ticket exists, or key_bytes + "|" + "hold|-" when no live ticket exists. On success the binary replies with NOTE value "held" and then advances the schedule. A missing, wrong-type, or wrong-value hold frame permanently locks the session and returns a decoy. Work sessions may use hold composition that is not present in fit packs. Graded work schedules are not listed here.
 
 ## Continue binding
 
 After every successful ticket grant, the binary enters a continue phase. The caller must send a CONTINUE frame (TLV type 0x07) with a 32-byte continue seal tag before the session schedule will advance past the ticket event. The full 32-byte tag is required for all cases, including fit packs.
 
-The continue seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The continue material string is the literal "cont" followed by slot, gen, nonce, and ticket_hex all joined by ASCII pipe separators. Example shape: key_bytes + "|" + "cont|slot|gen|nonce|ticket_hex" with decimal slot and gen.
+The continue seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The continue material string is the literal "cont" followed by a pipe and the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "cont|ticket_hex".
 
-The continue must bind the live identity at the point of the ticket grant. If the continue seal is incorrect or if the caller sends any frame other than a valid CONTINUE during the continue phase, the session locks permanently and all further responses are decoy flags.
+The continue must bind the live ticket from the grant. If the continue seal is incorrect or if the caller sends any frame other than a valid CONTINUE during the continue phase, the session locks permanently and all further responses are decoy flags.
 
 ## Fail-closed locking
 
@@ -82,25 +84,21 @@ The session uses fail-closed locking. The first failed ticket request, failed ho
 
 ## Identity and claim seal tags
 
-The claim seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, gen, scope, nonce, and ticket_hex joined by ASCII pipe separators, where ticket_hex is the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "slot|gen|scope|nonce|ticket_hex" with decimal slot and gen and no extra spaces.
-
-The request and continue seals use the same digest construction with their own material strings as defined above.
-
-The claim seal must bind the live identity at claim time. The identity state at claim may differ from the state at ticket issuance if internal session events intervene. Model identity changes (generation increments from ticks, generation and nonce rotation from reincarnations) to compute the correct claim-time seal. The ticket NOTE does not reveal the current generation.
+The claim seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, scope, and ticket_hex joined by ASCII pipe separators, where ticket_hex is the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "slot|scope|ticket_hex" with decimal slot and no extra spaces.
 
 Vault release requires:
 1. A valid live ticket (issued after the most recent identity rotation)
 2. A successful continue binding after the ticket grant
-3. A claim seal tag that validates for the live claim-time identity and that ticket
+3. A claim seal tag that validates for the live ticket
 4. AUTH plus CLAIM plus TICKET TLV records placed at exact nest depth (nest_required NEST layers for work challenges, zero for some fit packs)
 5. Full-digest-width (32 bytes) AUTH tag for work challenges with nest_required greater than zero
 6. Fit packs with nest_required zero may accept short AUTH tags (minimum 4 bytes)
 
-A successful claim returns the vault flag via REPLY. Any path that misses ticket freshness, request seal, continue binding, identity binding, nest depth, or tag width returns a format-valid decoy FLAG string.
+A successful claim returns the vault flag via REPLY. Any path that misses ticket freshness, request seal, continue binding, hold seal, nest depth, or tag width returns a format-valid decoy FLAG string.
 
 ## Decoys
 
-Format-valid FLAG{...} strings appear on paths that miss ticket binding, request seal, continue binding, live identity, nest depth, or seal-tag width. Claim success frames carry REPLY only. Ticket-grant frames carry TICKET plus an opaque NOTE. Continue success frames carry NOTE only. Hold success frames carry NOTE with value held. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary. Vault keystream and tickets bind an engine-internal secret that is not present in case.json. Compare REPLY against the case decoy_flag to distinguish success from failure when probing fit packs.
+Format-valid FLAG{...} strings appear on paths that miss ticket binding, request seal, continue binding, hold seal, live identity, nest depth, or seal-tag width. Claim success frames carry REPLY only. Ticket-grant frames carry TICKET plus an opaque NOTE. Continue success frames carry NOTE only. Hold success frames carry NOTE with value held. Work flags are not plaintext in case.json. They release only through a successful claim interaction with the binary. Vault keystream and tickets bind an engine-internal secret that is not present in case.json. Compare REPLY against the case decoy_flag to distinguish success from failure when probing fit packs.
 
 ## Output document
 

@@ -6,12 +6,7 @@
   "nest_required": 2,
   "key_hex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
   "scope": "vault.read",
-  "nonces": [
-    "e0",
-    "e1",
-    "e2"
-  ],
   "decoy_flag": "FLAG{echo_flat_habit_residue_44aa}",
   "real_flag": "FLAG{echo_ticket_bound_rebirth_91c2}",
-  "vault_blob_hex": "d68fdf856b0baab23af4ed103c201865eaa29bd81920363f5e09cb82351b90e7a1a0acbf"
+  "vault_blob_hex": "9e9085a683e410859d1f32b3b019be0c4af8020b76aaf24dbaebb1a73e2ec1a3e9bff69c"
 }
