@@ -1,11 +1,11 @@
 {
   "challenge_id": "echo",
-  "sched_hex": "13384424c9197a3edcb0bdd200",
+  "sched_hex": "12740819de0e0b72f69af19e5900",
   "slot": 15,
   "gen": 2,
   "nest_required": 2,
   "key_hex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
   "scope": "vault.read",
   "decoy_flag": "FLAG{echo_flat_habit_residue_44aa}",
-  "vault_blob_hex": "9e9085a683e410859d1f32b3b019be0c4af8020b76aaf24dbaebb1a73e2ec1a3e9bff69c"
+  "vault_blob_hex": "2acc66320172c2c180982a3cd8eb4fd9d5a860f0c44956f9b6831f4e3fa361145de31508"
 }

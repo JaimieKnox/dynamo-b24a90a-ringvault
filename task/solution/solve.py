@@ -47,7 +47,7 @@ def vault_salt() -> bytes:
     return bytes((h << 4) | l for h, l in zip(SALT_HI, SALT_LO))
 
 
-def compute_gate_tag(challenge_id: str, script_pos: int, event_code: int) -> str:
+def compute_gate_tag(challenge_id: str, script_pos: int, event_code: int) -> bytes:
     material = (
         vault_salt()
         + challenge_id.encode()
@@ -56,7 +56,7 @@ def compute_gate_tag(challenge_id: str, script_pos: int, event_code: int) -> str
         + b"|"
         + str(event_code).encode()
     )
-    return hashlib.sha256(material).digest()[:8].hex()
+    return hashlib.sha256(material).digest()[:8]
 
 
 def decode_schedule(challenge_id: str, sched_hex: str) -> list[int]:
@@ -163,9 +163,9 @@ def solve_case(case_dir):
             if event == EVT_HOLD:
                 gtag = compute_gate_tag(cid, script_pos, EVT_HOLD)
                 if live_ticket is not None:
-                    hold_mat = f"hold|{live_ticket.hex()}|{gtag}".encode()
+                    hold_mat = f"hold|{live_ticket.hex()}|".encode() + gtag
                 else:
-                    hold_mat = f"hold|-|{gtag}".encode()
+                    hold_mat = b"hold|-|" + gtag
                 hold_tag = compute_tag(key, hold_mat)
                 reply_data = lab.step(encode_frame(encode_tlv(TYPE_HOLD_SEAL, hold_tag)))
                 held = False
@@ -176,7 +176,7 @@ def solve_case(case_dir):
                     raise RuntimeError(f"hold gate failed for {cid} at {script_pos}")
             elif event == EVT_TICKET:
                 gtag = compute_gate_tag(cid, script_pos, EVT_TICKET)
-                req = f"{slot}|{scope}|request|{gtag}".encode()
+                req = f"{slot}|{scope}|request|".encode() + gtag
                 tag = compute_tag(key, req)
                 if nest_required == 0:
                     tag = tag[:4]
@@ -190,14 +190,14 @@ def solve_case(case_dir):
                     raise RuntimeError(f"no ticket for {cid} at {script_pos}")
                 live_ticket = got_ticket
 
-                cont_material = f"cont|{live_ticket.hex()}|{gtag}".encode()
+                cont_material = f"cont|{live_ticket.hex()}|".encode() + gtag
                 cont_tag = compute_tag(key, cont_material)
                 lab.step(encode_frame(encode_tlv(TYPE_CONTINUE, cont_tag)))
             elif event == EVT_CLAIM:
                 if live_ticket is None:
                     raise RuntimeError(f"no live ticket at claim for {cid}")
                 gtag = compute_gate_tag(cid, script_pos, EVT_CLAIM)
-                material = f"{slot}|{scope}|{live_ticket.hex()}|{gtag}".encode()
+                material = f"{slot}|{scope}|{live_ticket.hex()}|".encode() + gtag
                 tag = compute_tag(key, material)
                 if nest_required == 0:
                     tag = tag[:4]
