@@ -34,33 +34,7 @@
 #define SHA256_BLOCK 64
 #define SHA256_DIGEST 32
 
-/* ---- embedded schedules keyed by challenge_id ---- */
-
-/* Event codes: 1=tick 2=reincarnate 3=ticket 4=claim 5=hold */
-static const int sa[] = {3, 4};
-static const int sb[] = {2, 3, 2, 3, 4};
-static const int sg[] = {3, 1, 4};
-static const int s_bravo[]   = {1, 5, 3, 2, 5, 3, 1, 5, 1, 1, 4};
-static const int s_charlie[] = {5, 2, 1, 3, 5, 2, 3, 1, 5, 1, 4};
-static const int s_delta[]   = {1, 5, 2, 3, 1, 5, 2, 3, 1, 5, 1, 4};
-static const int s_echo[]    = {5, 1, 2, 3, 2, 5, 1, 3, 1, 5, 1, 4};
-
-typedef struct {
-    const char *id;
-    const int *events;
-    int count;
-} sched_entry;
-
-static const sched_entry SCHEDULES[] = {
-    {"alpha",   sa, 2},
-    {"beta",    sb, 5},
-    {"gamma",   sg, 3},
-    {"bravo",   s_bravo,   11},
-    {"charlie", s_charlie, 11},
-    {"delta",   s_delta,   12},
-    {"echo",    s_echo,    12},
-    {NULL, NULL, 0}
-};
+/* Schedules load from case.json sched_hex (opaque). */
 
 /* ---- minimal SHA-256 implementation ---- */
 
@@ -247,6 +221,10 @@ static long jp_read_int(jparser *j) {
     return neg ? -val : val;
 }
 
+static void fill_vault_salt(uint8_t out[16]);
+static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
+                            int *out_events, int *out_count);
+
 /* ---- case state ---- */
 
 typedef struct {
@@ -294,6 +272,8 @@ static int load_case(const char *case_dir, case_state *st) {
     jp_expect(&jp, '{');
 
     char key[128], val[4096];
+    char sched_hex[512];
+    sched_hex[0] = '\0';
     while (1) {
         jp_skip_ws(&jp);
         if (jp.pos >= jp.len) break;
@@ -332,6 +312,8 @@ static int load_case(const char *case_dir, case_state *st) {
             jp_expect(&jp, ']');
         } else if (strcmp(key, "challenge_id") == 0) {
             jp_read_string(&jp, st->challenge_id, sizeof(st->challenge_id));
+        } else if (strcmp(key, "sched_hex") == 0) {
+            jp_read_string(&jp, sched_hex, sizeof(sched_hex));
         } else {
             jp_skip_ws(&jp);
             if (jp.pos < jp.len && jp.data[jp.pos] == '"') {
@@ -358,17 +340,14 @@ static int load_case(const char *case_dir, case_state *st) {
     }
     free(json);
 
-    int found = 0;
-    for (int i = 0; SCHEDULES[i].id != NULL; i++) {
-        if (strcmp(st->challenge_id, SCHEDULES[i].id) == 0) {
-            st->script_count = SCHEDULES[i].count;
-            for (int j = 0; j < SCHEDULES[i].count; j++)
-                st->script[j] = SCHEDULES[i].events[j];
-            found = 1;
-            break;
-        }
+    if (sched_hex[0] == '\0') {
+        fprintf(stderr, "missing sched_hex\n");
+        return -1;
     }
-    if (!found) { fprintf(stderr, "unknown challenge\n"); return -1; }
+    if (decode_sched_hex(st->challenge_id, sched_hex, st->script, &st->script_count) != 0) {
+        fprintf(stderr, "bad schedule\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -413,8 +392,73 @@ static void write_reply_decoy(case_state *st) {
 
 /* ---- crypto ---- */
 
-/* Binary-only vault salt: never printed, never in case.json / BRIEF. */
-static const uint8_t VAULT_SALT[16] = { 0x6b, 0x2e, 0x91, 0xc4, 0x57, 0xa8, 0x3d, 0xf0, 0x1c, 0x9b, 0x44, 0xe7, 0x82, 0x5a, 0xd6, 0x0f };
+/* Binary-only vault salt: reconstructed at runtime, never contiguous clear array. */
+static void fill_vault_salt(uint8_t out[16]) {
+    /* Reconstruct salt at runtime from high/low nibble tables + volatile mix.
+     * Do not ship a single contiguous uint8_t salt[16] = {...}. */
+    static const uint8_t hi[16] = {
+        0x6, 0x2, 0x9, 0xc, 0x5, 0xa, 0x3, 0xf,
+        0x1, 0x9, 0x4, 0xe, 0x8, 0x5, 0xd, 0x0
+    };
+    static const uint8_t lo[16] = {
+        0xb, 0xe, 0x1, 0x4, 0x7, 0x8, 0xd, 0x0,
+        0xc, 0xb, 0x4, 0x7, 0x2, 0xa, 0x6, 0xf
+    };
+    volatile uint32_t sink = 0;
+    for (int i = 0; i < 16; i++) {
+        uint8_t v = (uint8_t)((hi[i] << 4) | lo[i]);
+        sink ^= v;
+        out[i] = (uint8_t)(v ^ (uint8_t)(sink & 0));
+    }
+}
+
+/* Opcode unpermute S-box: only five valid preimages map to 1..5; else 0. */
+static uint8_t opc_sbox(uint8_t x) {
+    switch (x) {
+        case 0x17: return EVT_TICK;
+        case 0x2a: return EVT_REINCARNATE;
+        case 0x3d: return EVT_TICKET;
+        case 0x4e: return EVT_CLAIM;
+        case 0x5b: return EVT_HOLD;
+        default: return 0;
+    }
+}
+
+static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
+                            int *out_events, int *out_count) {
+    uint8_t salt[16];
+    fill_vault_salt(salt);
+
+    uint8_t hash_in[256];
+    size_t idlen = strlen(challenge_id);
+    if (idlen == 0 || idlen > 200) return -1;
+    memcpy(hash_in, salt, 16);
+    memcpy(hash_in + 16, challenge_id, idlen);
+    uint8_t key[32];
+    sha256(hash_in, 16 + idlen, key);
+
+    uint8_t cipher[MAX_SCRIPT + 1];
+    int clen = hex_to_bytes(sched_hex, cipher, sizeof(cipher));
+    if (clen < 2) return -1;
+
+    uint8_t plain[MAX_SCRIPT + 1];
+    for (int j = 0; j < clen; j++)
+        plain[j] = (uint8_t)(cipher[j] ^ key[j % 32]);
+
+    int n = (int)plain[0];
+    if (n <= 0 || n > MAX_SCRIPT || clen != n + 1) return -1;
+
+    for (int i = 0; i < n; i++) {
+        uint8_t raw = plain[1 + i];
+        uint8_t idx = (uint8_t)(raw ^ key[i % 32]);
+        uint8_t logical = opc_sbox(idx);
+        if (logical == 0) return -1;
+        out_events[i] = (int)logical;
+    }
+    *out_count = n;
+    return 0;
+}
+
 
 
 static void compute_tag(const uint8_t *key, const uint8_t *material, size_t mlen, uint8_t out[32]) {
@@ -427,6 +471,8 @@ static void compute_tag(const uint8_t *key, const uint8_t *material, size_t mlen
 }
 
 static void issue_ticket(case_state *st) {
+    uint8_t salt[16];
+    fill_vault_salt(salt);
     uint8_t material[512];
     size_t mlen = 0;
     memcpy(material, st->key, 32); mlen += 32;
@@ -440,7 +486,7 @@ static void issue_ticket(case_state *st) {
     material[mlen++] = '|';
     size_t nlen = strlen(st->nonces[st->nonce_idx]);
     memcpy(material + mlen, st->nonces[st->nonce_idx], nlen); mlen += nlen;
-    memcpy(material + mlen, VAULT_SALT, 16); mlen += 16;
+    memcpy(material + mlen, salt, 16); mlen += 16;
 
     uint8_t hash[32];
     sha256(material, mlen, hash);
@@ -449,6 +495,8 @@ static void issue_ticket(case_state *st) {
 }
 
 static void vault_keystream(case_state *st, uint8_t ks[32]) {
+    uint8_t salt[16];
+    fill_vault_salt(salt);
     char ticket_hex[33];
     bytes_to_hex(st->ticket, 16, ticket_hex);
 
@@ -468,7 +516,7 @@ static void vault_keystream(case_state *st, uint8_t ks[32]) {
     material[mlen++] = '|';
     memcpy(material + mlen, ticket_hex, 32); mlen += 32;
     memcpy(material + mlen, "|open", 5); mlen += 5;
-    memcpy(material + mlen, VAULT_SALT, 16); mlen += 16;
+    memcpy(material + mlen, salt, 16); mlen += 16;
 
     sha256(material, mlen, ks);
 }

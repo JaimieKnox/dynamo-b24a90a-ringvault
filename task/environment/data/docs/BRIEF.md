@@ -14,7 +14,7 @@ The challenge engine is a compiled binary at /app/data/bin/vaultlab. No importab
 
 Run: /app/data/bin/vaultlab CASE_DIR
 
-The binary reads case.json from CASE_DIR and follows an internal session schedule embedded in the binary itself. Session schedules are not stored in case directories and are not accessible to the caller. The binary loops on stdin/stdout, processing one protocol step per frame pair until the session is exhausted.
+The binary reads case.json from CASE_DIR. Each case.json carries an opaque encrypted schedule blob in the sched_hex field. That blob is interpreted only inside the binary. It is not a readable script and does not document opcodes or encryption. The binary loops on stdin/stdout, processing one protocol step per frame pair until the session is exhausted.
 
 ## Frame protocol
 
@@ -35,7 +35,7 @@ Send one frame to the binary stdin per step. Read one reply frame from its stdou
 
 ## Session schedule
 
-The binary follows an internal session schedule embedded in the compiled binary, keyed by the challenge_id from case.json. Session schedules are not stored as files in case directories and cannot be extracted from case data. The schedule controls when identity state advances, when tickets are issued, when tickets are invalidated, and when the vault claim gate opens. Different cases have different schedules with varying structure and length. Graded work schedules are not identical to any disclosed fit pack.
+The binary follows a session schedule decoded from the case.json sched_hex opaque blob. The schedule controls when identity state advances, when tickets are issued, when tickets are invalidated, and when the vault claim gate opens. Different cases have different schedules with varying structure and length. Graded work schedules are not identical to any disclosed fit pack. Do not treat sched_hex as a human-readable script.
 
 Induce session structure from the disclosed fit packs and this brief. Fit packs teach composition patterns. Work packs retain held schedule residue. Blind exhaustive probing is a poor strategy because failed ticket requests, failed holds, failed continues, and failed claims lock the session.
 
