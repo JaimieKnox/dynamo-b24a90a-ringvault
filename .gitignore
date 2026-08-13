@@ -29,3 +29,5 @@ jobs/
 # Dynamo local Gates A–C marker (never commit)
 task/.dynamo_probe_ok
 .dynamo_probe_ok
+reshuffle.py
+gh_one_shot_out.txt
