@@ -1,199 +1,162 @@
 #!/usr/bin/env python3
-"""Oracle solution for RingVault CTF (binary protocol driver)."""
+"""Oracle solver for Mesh Claim CTF."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import struct
-import subprocess
-
-TYPE_AUTH = 0x01
-TYPE_NOTE = 0x02
-TYPE_NEST = 0x03
-TYPE_CLAIM = 0x04
-TYPE_REPLY = 0x05
-TYPE_TICKET = 0x06
-TYPE_CONTINUE = 0x07
-TYPE_HOLD_SEAL = 0x08
-
-VAULTLAB = "/app/data/bin/vaultlab"
-
-SCHEDULES = {
-    "bravo": ['hold', 'tick', 'ticket', 'reincarnate', 'tick', 'hold', 'ticket', 'hold', 'tick', 'tick', 'claim'],
-    "charlie": ['reincarnate', 'hold', 'tick', 'ticket', 'reincarnate', 'hold', 'ticket', 'tick', 'hold', 'tick', 'claim'],
-    "delta": ['tick', 'hold', 'reincarnate', 'ticket', 'tick', 'hold', 'reincarnate', 'ticket', 'tick', 'hold', 'tick', 'claim'],
-    "echo": ['hold', 'tick', 'reincarnate', 'ticket', 'reincarnate', 'hold', 'tick', 'ticket', 'tick', 'hold', 'tick', 'claim'],
-}
 
 
-def encode_tlv(typ, value):
-    return struct.pack("!BH", typ, len(value)) + value
+def resolve_name(name: str, aliases: dict[str, str]) -> str:
+    """Follow alias chains until stable."""
+    seen: set[str] = set()
+    while name in aliases and name not in seen:
+        seen.add(name)
+        name = aliases[name]
+    return name
 
 
-def encode_frame(body):
-    return struct.pack("!I", len(body)) + body
+def interpret_ledger(ledger_path: str, start_id: str):
+    """Process ledger ops and return (terminal_id, walk_edge_ids)."""
+    nodes: dict[str, str] = {}
+    edges: dict[str, tuple[str, str]] = {}
+    sinks: set[str] = set()
+    aliases: dict[str, str] = {}
+    cut_nodes: set[str] = set()
+    revoked_edges: set[str] = set()
+
+    with open(ledger_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            op = json.loads(line)
+            kind = op["op"]
+
+            if kind == "NODE":
+                nodes[op["id"]] = op["body"]
+            elif kind == "EDGE":
+                edges[op["id"]] = (op["src"], op["dst"])
+            elif kind == "CUT":
+                target = resolve_name(op["target"], aliases)
+                cut_nodes.add(target)
+                for eid, (s, d) in list(edges.items()):
+                    if resolve_name(s, aliases) == target or resolve_name(d, aliases) == target:
+                        revoked_edges.add(eid)
+            elif kind == "FORK":
+                src = resolve_name(op["src"], aliases)
+                dst = op["dst"]
+                if src in nodes:
+                    nodes[dst] = nodes[src]
+                cut_nodes.add(src)
+                for eid, (s, d) in list(edges.items()):
+                    if resolve_name(s, aliases) == src or resolve_name(d, aliases) == src:
+                        revoked_edges.add(eid)
+            elif kind == "ALIAS":
+                aliases[op["old"]] = op["new"]
+            elif kind == "REVOKE":
+                revoked_edges.add(op["target"])
+            elif kind == "SINK":
+                sinks.add(resolve_name(op["node"], aliases))
+
+    live_edges: dict[str, tuple[str, str]] = {}
+    for eid, (src, dst) in edges.items():
+        if eid in revoked_edges:
+            continue
+        rs = resolve_name(src, aliases)
+        rd = resolve_name(dst, aliases)
+        if rs in cut_nodes or rd in cut_nodes:
+            continue
+        live_edges[eid] = (rs, rd)
+
+    start = resolve_name(start_id, aliases)
+    adj: dict[str, list[tuple[str, str]]] = {}
+    for eid, (src, dst) in live_edges.items():
+        adj.setdefault(src, []).append((eid, dst))
+
+    reachable: set[str] = set()
+    stack = [start]
+    while stack:
+        node = stack.pop()
+        if node in reachable:
+            continue
+        reachable.add(node)
+        for _, dst in adj.get(node, []):
+            stack.append(dst)
+
+    live_sinks = [s for s in sinks if s in reachable and s not in cut_nodes]
+    if not live_sinks:
+        raise ValueError("No reachable live SINK nodes")
+    terminal = max(live_sinks)
+
+    for node in adj:
+        adj[node].sort(key=lambda x: x[0])
+
+    path_edges: list[str] = []
+    current = start
+    visited: set[str] = set()
+    while current != terminal:
+        if current in visited:
+            raise ValueError(f"Cycle at {current}")
+        visited.add(current)
+        if current not in adj:
+            raise ValueError(f"Dead end at {current}")
+        eid, dst = adj[current][0]
+        path_edges.append(eid)
+        current = dst
+
+    return terminal, path_edges
 
 
-def decode_frame(data):
-    length = struct.unpack("!I", data[:4])[0]
-    return data[4 : 4 + length]
+def compute_walk_hex(edge_ids: list[str]) -> str:
+    joined = "|".join(edge_ids)
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-def decode_tlvs(body):
-    offset = 0
-    while offset < len(body):
-        typ = body[offset]
-        vlen = struct.unpack("!H", body[offset + 1 : offset + 3])[0]
-        offset += 3
-        yield typ, body[offset : offset + vlen]
-        offset += vlen
+def compute_claim_seal(key_bytes: bytes, slot: int, terminal_id: str,
+                       scope: str, nonce: str, walk_hex: str) -> bytes:
+    material = f"{slot}|{terminal_id}|{scope}|{nonce}|{walk_hex}|open"
+    return hashlib.sha256(key_bytes + b"|" + material.encode("utf-8")).digest()
 
 
-def wrap_nested(inner_body, depth):
-    current = inner_body
-    for _ in range(depth):
-        current = encode_tlv(TYPE_NEST, current)
-    return current
+def decrypt_flag(vault_blob_hex: str, keystream: bytes) -> str:
+    vault = bytes.fromhex(vault_blob_hex)
+    flag_bytes = bytearray(len(vault))
+    for i in range(len(vault)):
+        flag_bytes[i] = vault[i] ^ keystream[i % 32]
+    return flag_bytes.decode("utf-8")
 
 
-def compute_tag(key: bytes, material: bytes) -> bytes:
-    return hashlib.sha256(key + b"|" + material).digest()
+def solve_case(case_dir: str) -> tuple[str, str]:
+    case_path = os.path.join(case_dir, "case.json")
+    ledger_path = os.path.join(case_dir, "ledger.jsonl")
 
-
-def make_request_material(slot: int, scope: str) -> bytes:
-    return f"{slot}|{scope}|request".encode()
-
-
-def make_cont_material(ticket: bytes) -> bytes:
-    return f"cont|{ticket.hex()}".encode()
-
-
-def make_claim_material(slot: int, scope: str, ticket: bytes) -> bytes:
-    return f"{slot}|{scope}|{ticket.hex()}".encode()
-
-
-def make_hold_material(ticket: bytes | None) -> bytes:
-    if ticket is not None:
-        return f"hold|{ticket.hex()}".encode()
-    return b"hold|-"
-
-
-class BinaryLab:
-    """Drives the vaultlab binary over stdin/stdout frames."""
-
-    def __init__(self, case_dir: str):
-        self._proc = subprocess.Popen(
-            [VAULTLAB, case_dir],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def step(self, raw_frame: bytes) -> bytes:
-        self._proc.stdin.write(raw_frame)
-        self._proc.stdin.flush()
-        hdr = self._proc.stdout.read(4)
-        if len(hdr) < 4:
-            raise RuntimeError("binary closed stdout unexpectedly")
-        length = struct.unpack("!I", hdr)[0]
-        body = self._proc.stdout.read(length)
-        return struct.pack("!I", length) + body
-
-    def close(self):
-        if self._proc.stdin:
-            self._proc.stdin.close()
-        self._proc.wait()
-
-
-def solve_case(case_dir):
-    with open(os.path.join(case_dir, "case.json"), encoding="utf-8") as f:
+    with open(case_path, encoding="utf-8") as f:
         case = json.load(f)
 
-    cid = case["challenge_id"]
-    schedule = SCHEDULES[cid]
-
-    lab = BinaryLab(case_dir)
-    key = bytes.fromhex(case["key_hex"])
-    slot = case["slot"]
-    scope = case["scope"]
-    nest_required = case["nest_required"]
-
-    live_ticket = None
-
-    try:
-        for event in schedule:
-            if event == "tick":
-                pass
-            elif event == "reincarnate":
-                live_ticket = None
-            elif event == "hold":
-                hold_mat = make_hold_material(live_ticket)
-                hold_tag = compute_tag(key, hold_mat)
-                body = encode_tlv(TYPE_HOLD_SEAL, hold_tag)
-                reply_data = lab.step(encode_frame(body))
-                held = False
-                for typ, val in decode_tlvs(decode_frame(reply_data)):
-                    if typ == TYPE_NOTE and val == b"held":
-                        held = True
-                if not held:
-                    raise RuntimeError(f"hold gate failed for {cid}")
-            elif event == "ticket":
-                req = make_request_material(slot, scope)
-                tag = compute_tag(key, req)
-                if nest_required == 0:
-                    tag = tag[:4]
-                body = encode_tlv(TYPE_AUTH, tag) + encode_tlv(TYPE_NOTE, b"session")
-                reply_data = lab.step(encode_frame(body))
-                got_ticket = None
-                for typ, val in decode_tlvs(decode_frame(reply_data)):
-                    if typ == TYPE_TICKET:
-                        got_ticket = val
-                if got_ticket is None:
-                    raise RuntimeError(f"no ticket for {cid}")
-                live_ticket = got_ticket
-
-                cont_material = make_cont_material(live_ticket)
-                cont_tag = compute_tag(key, cont_material)
-                lab.step(encode_frame(encode_tlv(TYPE_CONTINUE, cont_tag)))
-            elif event == "claim":
-                if live_ticket is None:
-                    raise RuntimeError(f"no live ticket at claim for {cid}")
-                material = make_claim_material(slot, scope, live_ticket)
-                tag = compute_tag(key, material)
-                if nest_required == 0:
-                    tag = tag[:4]
-
-                inner = (
-                    encode_tlv(TYPE_AUTH, tag)
-                    + encode_tlv(TYPE_CLAIM, scope.encode())
-                    + encode_tlv(TYPE_TICKET, live_ticket)
-                )
-                body = wrap_nested(inner, nest_required)
-                reply_frame = lab.step(encode_frame(body))
-                for typ, val in decode_tlvs(decode_frame(reply_frame)):
-                    if typ == TYPE_REPLY:
-                        return val.decode("utf-8")
-                raise RuntimeError(f"No REPLY for {cid}")
-    finally:
-        lab.close()
-
-    raise RuntimeError(f"schedule ended without claim for {cid}")
+    key_bytes = bytes.fromhex(case["key_hex"])
+    terminal, walk_edges = interpret_ledger(ledger_path, case["start_id"])
+    walk_hex = compute_walk_hex(walk_edges)
+    keystream = compute_claim_seal(
+        key_bytes, case["slot"], terminal, case["scope"], case["nonce"], walk_hex,
+    )
+    flag = decrypt_flag(case["vault_blob_hex"], keystream)
+    return case["challenge_id"], flag
 
 
-def main():
+def main() -> None:
     work_dir = "/app/data/work"
     results = []
-    for case_name in sorted(os.listdir(work_dir)):
-        case_path = os.path.join(work_dir, case_name)
+    for name in sorted(os.listdir(work_dir)):
+        case_path = os.path.join(work_dir, name)
         if not os.path.isdir(case_path):
             continue
         if not os.path.isfile(os.path.join(case_path, "case.json")):
             continue
-        flag = solve_case(case_path)
-        results.append({"id": case_name, "flag": flag})
-        print(f"  {case_name}: {flag}")
+        cid, flag = solve_case(case_path)
+        results.append({"id": cid, "flag": flag})
+        print(f"  {cid}: {flag}")
 
     results.sort(key=lambda x: x["id"])
     output = {"challenges": results}

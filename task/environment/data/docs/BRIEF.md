@@ -52,11 +52,21 @@ The binary may advance identity state (generation, active nonce, ticket validity
 
 Each fit pack teaches a distinct composition pattern. Alpha is a baseline ticket then claim. Beta exercises ticket lifecycle across identity changes. Gamma exercises a post-ticket identity advance before claim.
 
+## Gate tag
+
+Every gate seal (request, continue, hold, claim) requires a gate_tag appended to the material string. The gate_tag is 16 lowercase hexadecimal characters (8 bytes) that bind the seal to a specific schedule position and gate type. The gate_tag is not present in case.json and cannot be obtained by enumerating gate types or restarting the binary.
+
+The gate_tag for a given gate is the first 8 bytes of SHA-256(engine-internal secret bytes || challenge_id || "|" || script_pos || "|" || event_code), rendered as 16 lowercase hex characters. Here script_pos is the zero-based decimal index of the gate in the decoded schedule, and event_code is the decimal numeric code for the gate type at that position. The engine-internal secret is the same binary-only salt that protects ticket issuance and schedule decryption. It is not disclosed in case.json or this brief.
+
+Gate type codes: tick is 1, reincarnate is 2, ticket is 3, claim is 4, hold is 5. The continue phase shares the same script_pos and event_code as its parent ticket gate.
+
+A solver that has recovered the engine secret and decoded the schedule can compute gate_tags for every position. Without the engine secret, gate_tags are unpredictable (2^64 space per gate).
+
 ## Ticket request seal
 
 Ticket gates do not accept a bare NOTE. The caller must send AUTH plus NOTE in one frame. The AUTH value is a request seal tag.
 
-The request seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, scope, and the literal word request joined by ASCII pipe separators. Example shape: key_bytes + "|" + "slot|scope|request" with decimal slot and no extra spaces.
+The request seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, scope, the literal word request, and the gate_tag joined by ASCII pipe separators. Example shape: key_bytes + "|" + "slot|scope|request|gate_tag" with decimal slot and no extra spaces.
 
 Fit packs with nest_required zero may accept a short request AUTH tag (minimum 4 bytes prefix of the digest). Work challenges with nest_required greater than zero require the full 32-byte request AUTH tag.
 
@@ -68,13 +78,13 @@ Tickets are opaque binary values issued by the engine. The ticket bytes bind int
 
 ## Hold gate
 
-Some sessions include hold gates. A hold gate is not present in the disclosed fit packs. When the schedule reaches a hold gate the binary enters a hold phase. The caller must send a frame that contains a HOLD_SEAL TLV (type 0x08) with a 32-byte hold seal tag. The hold seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The hold material string is the literal "hold" followed by a pipe and the lowercase hex encoding of the live ticket bytes, or a literal dash "-" if no ticket is currently live. Example shapes: key_bytes + "|" + "hold|ticket_hex" when a live ticket exists, or key_bytes + "|" + "hold|-" when no live ticket exists. On success the binary replies with NOTE value "held" and then advances the schedule. A missing, wrong-type, or wrong-value hold frame permanently locks the session and returns a decoy. Work sessions may use hold composition that is not present in fit packs. Graded work schedules are not listed here.
+Some sessions include hold gates. A hold gate is not present in the disclosed fit packs. When the schedule reaches a hold gate the binary enters a hold phase. The caller must send a frame that contains a HOLD_SEAL TLV (type 0x08) with a 32-byte hold seal tag. The hold seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The hold material string is the literal "hold" followed by a pipe and the lowercase hex encoding of the live ticket bytes (or a literal dash "-" if no ticket is currently live), followed by a pipe and the gate_tag. Example shapes: key_bytes + "|" + "hold|ticket_hex|gate_tag" when a live ticket exists, or key_bytes + "|" + "hold|-|gate_tag" when no live ticket exists. On success the binary replies with NOTE value "held" and then advances the schedule. A missing, wrong-type, or wrong-value hold frame permanently locks the session and returns a decoy. Work sessions may use hold composition that is not present in fit packs. Graded work schedules are not listed here.
 
 ## Continue binding
 
 After every successful ticket grant, the binary enters a continue phase. The caller must send a CONTINUE frame (TLV type 0x07) with a 32-byte continue seal tag before the session schedule will advance past the ticket event. The full 32-byte tag is required for all cases, including fit packs.
 
-The continue seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The continue material string is the literal "cont" followed by a pipe and the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "cont|ticket_hex".
+The continue seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The continue material string is the literal "cont" followed by a pipe, the lowercase hex encoding of the live ticket bytes, another pipe, and the gate_tag. The continue gate_tag uses the same script_pos and event_code as the parent ticket gate. Example shape: key_bytes + "|" + "cont|ticket_hex|gate_tag".
 
 The continue must bind the live ticket from the grant. If the continue seal is incorrect or if the caller sends any frame other than a valid CONTINUE during the continue phase, the session locks permanently and all further responses are decoy flags.
 
@@ -84,7 +94,7 @@ The session uses fail-closed locking. The first failed ticket request, failed ho
 
 ## Identity and claim seal tags
 
-The claim seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, scope, and ticket_hex joined by ASCII pipe separators, where ticket_hex is the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "slot|scope|ticket_hex" with decimal slot and no extra spaces.
+The claim seal tag is the SHA-256 digest of these bytes in order: the 32 raw key bytes, one ASCII pipe separator, then the ASCII material string. The material string is slot, scope, ticket_hex, and gate_tag joined by ASCII pipe separators, where ticket_hex is the lowercase hex encoding of the live ticket bytes. Example shape: key_bytes + "|" + "slot|scope|ticket_hex|gate_tag" with decimal slot and no extra spaces.
 
 Vault release requires:
 1. A valid live ticket (issued after the most recent identity rotation)

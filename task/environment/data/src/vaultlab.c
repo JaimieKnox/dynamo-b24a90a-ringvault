@@ -226,6 +226,28 @@ static void fill_vault_salt(uint8_t out[16]);
 static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
                             int *out_events, int *out_count);
 
+/* ---- gate_tag derivation (engine-internal, per-step seal) ---- */
+
+static void compute_gate_tag(const char *challenge_id, int script_pos, int event_code, char out[17]) {
+    uint8_t salt[16];
+    fill_vault_salt(salt);
+    uint8_t material[256];
+    size_t mlen = 0;
+    memcpy(material, salt, 16); mlen += 16;
+    size_t idlen = strlen(challenge_id);
+    memcpy(material + mlen, challenge_id, idlen); mlen += idlen;
+    material[mlen++] = '|';
+    char num[16];
+    int n = snprintf(num, sizeof(num), "%d", script_pos);
+    memcpy(material + mlen, num, n); mlen += (size_t)n;
+    material[mlen++] = '|';
+    n = snprintf(num, sizeof(num), "%d", event_code);
+    memcpy(material + mlen, num, n); mlen += (size_t)n;
+    uint8_t hash[32];
+    sha256(material, mlen, hash);
+    bytes_to_hex(hash, 8, out);
+}
+
 /* ---- nonce derivation (engine-internal) ---- */
 
 static void derive_nonce(const char *challenge_id, int nonce_idx,
@@ -641,10 +663,12 @@ static void check_continue(case_state *st, const uint8_t *body, size_t blen) {
         return;
     }
 
+    char cont_gtag[17];
+    compute_gate_tag(st->challenge_id, st->script_pos, st->script[st->script_pos], cont_gtag);
     char ticket_hex[33];
     bytes_to_hex(st->ticket, 16, ticket_hex);
     char mat_str[512];
-    int mlen = snprintf(mat_str, sizeof(mat_str), "cont|%s", ticket_hex);
+    int mlen = snprintf(mat_str, sizeof(mat_str), "cont|%s|%s", ticket_hex, cont_gtag);
 
     uint8_t computed[32];
     compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
@@ -704,11 +728,13 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
         st->locked = 1; write_reply_decoy(st); return;
     }
 
+    char claim_gtag[17];
+    compute_gate_tag(st->challenge_id, st->script_pos, EVT_CLAIM, claim_gtag);
     char ticket_hex[33];
     bytes_to_hex(st->ticket, 16, ticket_hex);
     char mat_str[512];
-    int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%s|%s",
-                        st->slot, st->scope, ticket_hex);
+    int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%s|%s|%s",
+                        st->slot, st->scope, ticket_hex, claim_gtag);
 
     uint8_t computed[32];
     compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
@@ -763,14 +789,16 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
             write_reply_decoy(st);
             return;
         }
-        char hold_mat[128];
+        char gtag[17];
+        compute_gate_tag(st->challenge_id, st->script_pos, EVT_HOLD, gtag);
+        char hold_mat[256];
         int hlen;
         if (st->has_ticket) {
             char th[33];
             bytes_to_hex(st->ticket, 16, th);
-            hlen = snprintf(hold_mat, sizeof(hold_mat), "hold|%s", th);
+            hlen = snprintf(hold_mat, sizeof(hold_mat), "hold|%s|%s", th, gtag);
         } else {
-            hlen = snprintf(hold_mat, sizeof(hold_mat), "hold|-");
+            hlen = snprintf(hold_mat, sizeof(hold_mat), "hold|-|%s", gtag);
         }
         uint8_t computed[32];
         compute_tag(st->key, (const uint8_t*)hold_mat, (size_t)hlen, computed);
@@ -802,9 +830,11 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
             return;
         }
 
+        char req_gtag[17];
+        compute_gate_tag(st->challenge_id, st->script_pos, EVT_TICKET, req_gtag);
         char mat_str[512];
-        int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%s|request",
-                            st->slot, st->scope);
+        int mlen = snprintf(mat_str, sizeof(mat_str), "%d|%s|request|%s",
+                            st->slot, st->scope, req_gtag);
         uint8_t computed[32];
         compute_tag(st->key, (const uint8_t*)mat_str, (size_t)mlen, computed);
 
