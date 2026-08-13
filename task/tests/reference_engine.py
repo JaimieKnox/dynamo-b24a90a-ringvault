@@ -1,7 +1,7 @@
 """Independent reference capture for RingVault (verify-time only).
 
-Drives the vaultlab binary over the same TLV frame protocol as the oracle
-solution, capturing real vault flags from sealed test-input case directories.
+Pure-Python vault crypto simulation.  Does NOT subprocess anything under /app.
+Reads sealed test-input case directories and recomputes flags independently.
 """
 
 from __future__ import annotations
@@ -9,26 +9,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import struct
-import subprocess
 from pathlib import Path
-
-TYPE_AUTH = 0x01
-TYPE_NOTE = 0x02
-TYPE_NEST = 0x03
-TYPE_CLAIM = 0x04
-TYPE_REPLY = 0x05
-TYPE_TICKET = 0x06
-TYPE_CONTINUE = 0x07
-TYPE_HOLD_SEAL = 0x08
 
 EVT_TICK = 1
 EVT_REINCARNATE = 2
 EVT_TICKET = 3
 EVT_CLAIM = 4
 EVT_HOLD = 5
-
-VAULTLAB = "/app/data/bin/vaultlab"
 
 SALT_HI = bytes([
     0x6, 0x2, 0x9, 0xc, 0x5, 0xa, 0x3, 0xf,
@@ -51,18 +38,6 @@ def _vault_salt() -> bytes:
     return bytes((h << 4) | l for h, l in zip(SALT_HI, SALT_LO))
 
 
-def _compute_gate_tag(challenge_id: str, script_pos: int, event_code: int) -> str:
-    material = (
-        _vault_salt()
-        + challenge_id.encode()
-        + b"|"
-        + str(script_pos).encode()
-        + b"|"
-        + str(event_code).encode()
-    )
-    return hashlib.sha256(material).digest()[:8].hex()
-
-
 def _decode_schedule(challenge_id: str, sched_hex: str) -> list[int]:
     salt = _vault_salt()
     key = hashlib.sha256(salt + challenge_id.encode()).digest()
@@ -81,148 +56,84 @@ def _decode_schedule(challenge_id: str, sched_hex: str) -> list[int]:
     return events
 
 
-def _encode_tlv(typ: int, value: bytes) -> bytes:
-    return struct.pack("!BH", typ, len(value)) + value
+def _derive_nonce(salt: bytes, challenge_id: str, nonce_idx: int) -> str:
+    material = salt + challenge_id.encode() + b"|" + str(nonce_idx).encode()
+    return hashlib.sha256(material).digest()[:8].hex()
 
 
-def _encode_frame(body: bytes) -> bytes:
-    return struct.pack("!I", len(body)) + body
+def _issue_ticket(
+    key: bytes, salt: bytes, challenge_id: str,
+    slot: int, gen: int, nonce_idx: int,
+) -> bytes:
+    nonce = _derive_nonce(salt, challenge_id, nonce_idx)
+    material = (
+        key
+        + b"|ticket|"
+        + f"{slot}|{gen}|{nonce}".encode()
+        + salt
+    )
+    return hashlib.sha256(material).digest()[:16]
 
 
-def _decode_frame(data: bytes) -> bytes:
-    length = struct.unpack("!I", data[:4])[0]
-    return data[4 : 4 + length]
+def _decrypt_flag(
+    key: bytes, salt: bytes,
+    slot: int, gen: int, scope: str,
+    ticket: bytes, vault_blob: bytes,
+) -> str:
+    ticket_hex = ticket.hex()
+    ks_material = (
+        key
+        + b"|"
+        + f"{slot}|{gen}|{scope}|{ticket_hex}|open".encode()
+        + salt
+    )
+    keystream = hashlib.sha256(ks_material).digest()
+    plain = bytes(vault_blob[i] ^ keystream[i % 32] for i in range(len(vault_blob)))
+    return plain.decode("utf-8")
 
 
-def _decode_tlvs(body: bytes):
-    offset = 0
-    while offset < len(body):
-        typ = body[offset]
-        vlen = struct.unpack("!H", body[offset + 1 : offset + 3])[0]
-        offset += 3
-        yield typ, body[offset : offset + vlen]
-        offset += vlen
-
-
-def _wrap_nested(inner: bytes, depth: int) -> bytes:
-    cur = inner
-    for _ in range(depth):
-        cur = _encode_tlv(TYPE_NEST, cur)
-    return cur
-
-
-def _compute_tag(key: bytes, material: bytes) -> bytes:
-    return hashlib.sha256(key + b"|" + material).digest()
-
-
-class _BinaryLab:
-    def __init__(self, case_dir: str):
-        self._proc = subprocess.Popen(
-            [VAULTLAB, case_dir],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def step(self, raw_frame: bytes) -> bytes:
-        self._proc.stdin.write(raw_frame)
-        self._proc.stdin.flush()
-        hdr = self._proc.stdout.read(4)
-        if len(hdr) < 4:
-            raise RuntimeError("binary closed stdout unexpectedly")
-        length = struct.unpack("!I", hdr)[0]
-        body = self._proc.stdout.read(length)
-        return struct.pack("!I", length) + body
-
-    def close(self):
-        if self._proc.stdin:
-            self._proc.stdin.close()
-        self._proc.wait()
-
-
-def _solve_case(case_dir: str) -> str:
-    with open(os.path.join(case_dir, "case.json"), encoding="utf-8") as f:
+def _solve_case(case_path: str) -> str:
+    with open(os.path.join(case_path, "case.json"), encoding="utf-8") as f:
         case = json.load(f)
 
     cid = case["challenge_id"]
     schedule = _decode_schedule(cid, case["sched_hex"])
-    lab = _BinaryLab(case_dir)
     key = bytes.fromhex(case["key_hex"])
+    salt = _vault_salt()
     slot = case["slot"]
+    gen = case["gen"]
     scope = case["scope"]
-    nest_required = case["nest_required"]
-    live_ticket: bytes | None = None
+    vault_blob = bytes.fromhex(case["vault_blob_hex"])
+    nonce_idx = 0
+    ticket: bytes | None = None
 
-    try:
-        for script_pos, event in enumerate(schedule):
-            if event == EVT_TICK:
-                continue
-            if event == EVT_REINCARNATE:
-                live_ticket = None
-                continue
-
-            if event == EVT_HOLD:
-                gtag = _compute_gate_tag(cid, script_pos, EVT_HOLD)
-                if live_ticket is not None:
-                    hold_mat = f"hold|{live_ticket.hex()}|{gtag}".encode()
-                else:
-                    hold_mat = f"hold|-|{gtag}".encode()
-                hold_tag = _compute_tag(key, hold_mat)
-                reply = lab.step(_encode_frame(_encode_tlv(TYPE_HOLD_SEAL, hold_tag)))
-                held = any(
-                    typ == TYPE_NOTE and val == b"held"
-                    for typ, val in _decode_tlvs(_decode_frame(reply))
+    for event in schedule:
+        if event == EVT_TICK:
+            gen += 1
+        elif event == EVT_REINCARNATE:
+            gen += 1
+            nonce_idx += 1
+            ticket = None
+        elif event == EVT_TICKET:
+            ticket = _issue_ticket(key, salt, cid, slot, gen, nonce_idx)
+        elif event == EVT_CLAIM:
+            if ticket is None:
+                raise RuntimeError(f"no ticket at claim for {cid}")
+            flag = _decrypt_flag(key, salt, slot, gen, scope, ticket, vault_blob)
+            if "real_flag" in case and flag != case["real_flag"]:
+                raise RuntimeError(
+                    f"flag mismatch for {cid}: got {flag!r}, "
+                    f"expected {case['real_flag']!r}"
                 )
-                if not held:
-                    raise RuntimeError(f"hold failed for {cid} pos {script_pos}")
-
-            elif event == EVT_TICKET:
-                gtag = _compute_gate_tag(cid, script_pos, EVT_TICKET)
-                req = f"{slot}|{scope}|request|{gtag}".encode()
-                tag = _compute_tag(key, req)
-                if nest_required == 0:
-                    tag = tag[:4]
-                body = _encode_tlv(TYPE_AUTH, tag) + _encode_tlv(TYPE_NOTE, b"session")
-                reply = lab.step(_encode_frame(body))
-                got_ticket = None
-                for typ, val in _decode_tlvs(_decode_frame(reply)):
-                    if typ == TYPE_TICKET:
-                        got_ticket = val
-                if got_ticket is None:
-                    raise RuntimeError(f"no ticket for {cid} pos {script_pos}")
-                live_ticket = got_ticket
-
-                cont_mat = f"cont|{live_ticket.hex()}|{gtag}".encode()
-                cont_tag = _compute_tag(key, cont_mat)
-                lab.step(_encode_frame(_encode_tlv(TYPE_CONTINUE, cont_tag)))
-
-            elif event == EVT_CLAIM:
-                if live_ticket is None:
-                    raise RuntimeError(f"no ticket at claim for {cid}")
-                gtag = _compute_gate_tag(cid, script_pos, EVT_CLAIM)
-                mat = f"{slot}|{scope}|{live_ticket.hex()}|{gtag}".encode()
-                tag = _compute_tag(key, mat)
-                if nest_required == 0:
-                    tag = tag[:4]
-                inner = (
-                    _encode_tlv(TYPE_AUTH, tag)
-                    + _encode_tlv(TYPE_CLAIM, scope.encode())
-                    + _encode_tlv(TYPE_TICKET, live_ticket)
-                )
-                body = _wrap_nested(inner, nest_required)
-                reply = lab.step(_encode_frame(body))
-                for typ, val in _decode_tlvs(_decode_frame(reply)):
-                    if typ == TYPE_REPLY:
-                        return val.decode("utf-8")
-                raise RuntimeError(f"no REPLY for {cid}")
-    finally:
-        lab.close()
+            return flag
+        elif event == EVT_HOLD:
+            pass
 
     raise RuntimeError(f"schedule ended without claim for {cid}")
 
 
 def capture_all_work_flags() -> dict[str, str]:
-    """Capture flags by driving vaultlab against sealed test inputs."""
+    """Capture flags by simulating vault crypto against sealed test inputs."""
     root = Path("/tests/inputs")
     out: dict[str, str] = {}
     for case_path in sorted(root.iterdir()):
