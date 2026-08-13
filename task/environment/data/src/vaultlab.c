@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <errno.h>
 #include <sys/prctl.h>
+#include <sys/ptrace.h>
 
 #define TYPE_AUTH   0x01
 #define TYPE_NOTE   0x02
@@ -36,7 +37,9 @@
 #define SHA256_BLOCK 64
 #define SHA256_DIGEST 32
 
-/* Schedules load from case.json sched_hex (opaque). */
+#ifndef INTEGRITY_EXPECT
+#define INTEGRITY_EXPECT 0ULL
+#endif
 
 /* ---- minimal SHA-256 implementation ---- */
 
@@ -139,6 +142,62 @@ static void sha256(const uint8_t *data, size_t len, uint8_t out[32]) {
     sha256_final(&ctx, out);
 }
 
+/* ---- constant-time equality (kills memcmp patch + GDB breakpoint oracle) ---- */
+
+static __attribute__((noinline, used))
+int ct_eq(const volatile uint8_t *a, const volatile uint8_t *b, size_t n) {
+    volatile uint8_t acc = 0;
+    for (size_t i = 0; i < n; i++) {
+        acc |= (uint8_t)(a[i] ^ b[i]);
+    }
+    return (acc == 0) ? 1 : 0;
+}
+
+/* ---- self-integrity check (kills naive binary patching of ct_eq) ---- */
+
+static const uint8_t integrity_cookie[16] = {
+    0xa7, 0x3f, 0x5c, 0x21, 0xe8, 0x94, 0x0b, 0xd6,
+    0x72, 0x1a, 0x4e, 0xf5, 0x83, 0xc9, 0x60, 0xbd
+};
+
+static volatile uint64_t g_integrity_expect = INTEGRITY_EXPECT;
+
+static int verify_text_integrity(void) {
+    if (g_integrity_expect == 0ULL) return 1;
+    const uint8_t *fn = (const uint8_t *)(uintptr_t)ct_eq;
+    uint64_t h = 0xcbf29ce484222325ULL;
+    for (int i = 0; i < 16; i++) {
+        h ^= integrity_cookie[i];
+        h *= 0x100000001b3ULL;
+    }
+    for (int i = 0; i < 128; i++) {
+        h ^= fn[i];
+        h *= 0x100000001b3ULL;
+    }
+    return (h == g_integrity_expect) ? 1 : 0;
+}
+
+/* ---- anti-ptrace decoy (kills GDB attach for live oracle) ---- */
+
+static int check_tracer(void) {
+    FILE *f = fopen("/proc/self/status", "r");
+    if (!f) return 0;
+    char line[256];
+    int tracer_pid = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "TracerPid:", 10) == 0) {
+            tracer_pid = (int)strtol(line + 10, NULL, 10);
+            break;
+        }
+    }
+    fclose(f);
+    if (tracer_pid != 0) return 1;
+    if (ptrace(PTRACE_TRACEME, 0, 0, 0) == 0) {
+        ptrace(PTRACE_DETACH, 0, 0, 0);
+    }
+    return 0;
+}
+
 /* ---- hex utility ---- */
 
 static int hex_to_bytes(const char *hex, uint8_t *out, size_t max_out) {
@@ -223,18 +282,54 @@ static long jp_read_int(jparser *j) {
     return neg ? -val : val;
 }
 
-static void fill_vault_salt(uint8_t out[16]);
+/* ---- streamed vault salt (never 16 contiguous bytes in memory) ---- */
+
+static const uint8_t salt_hi[16] = {
+    0x6, 0x2, 0x9, 0xc, 0x5, 0xa, 0x3, 0xf,
+    0x1, 0x9, 0x4, 0xe, 0x8, 0x5, 0xd, 0x0
+};
+static const uint8_t salt_lo[16] = {
+    0xb, 0xe, 0x1, 0x4, 0x7, 0x8, 0xd, 0x0,
+    0xc, 0xb, 0x4, 0x7, 0x2, 0xa, 0x6, 0xf
+};
+
+static void feed_vault_salt(sha256_ctx *ctx) {
+    for (int i = 0; i < 16; i++) {
+        volatile uint8_t b = (uint8_t)((salt_hi[i] << 4) | salt_lo[i]);
+        sha256_update(ctx, (const uint8_t *)&b, 1);
+        *(volatile uint8_t *)&b = 0;
+    }
+}
+
+static uint8_t salt_byte_at(int i) {
+    volatile uint8_t b = (uint8_t)((salt_hi[i] << 4) | salt_lo[i]);
+    uint8_t r = b;
+    *(volatile uint8_t *)&b = 0;
+    return r;
+}
+
 static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
                             int *out_events, int *out_count);
+
+/* ---- Opcode unpermute S-box ---- */
+
+static uint8_t opc_sbox(uint8_t x) {
+    switch (x) {
+        case 0x17: return EVT_TICK;
+        case 0x2a: return EVT_REINCARNATE;
+        case 0x3d: return EVT_TICKET;
+        case 0x4e: return EVT_CLAIM;
+        case 0x5b: return EVT_HOLD;
+        default: return 0;
+    }
+}
 
 /* ---- gate_tag derivation (engine-internal, per-step seal) ---- */
 
 static void compute_gate_tag(const char *challenge_id, int script_pos, int event_code, uint8_t out[8]) {
-    uint8_t salt[16];
-    fill_vault_salt(salt);
     sha256_ctx gctx;
     sha256_init(&gctx);
-    sha256_update(&gctx, salt, 16);
+    feed_vault_salt(&gctx);
     sha256_update(&gctx, (const uint8_t *)challenge_id, strlen(challenge_id));
     uint8_t pipe = '|';
     sha256_update(&gctx, &pipe, 1);
@@ -249,7 +344,6 @@ static void compute_gate_tag(const char *challenge_id, int script_pos, int event
     memcpy(out, hash, 8);
     explicit_bzero(&gctx, sizeof(gctx));
     explicit_bzero(hash, sizeof(hash));
-    explicit_bzero(salt, sizeof(salt));
     explicit_bzero(num, sizeof(num));
 }
 
@@ -257,23 +351,20 @@ static void compute_gate_tag(const char *challenge_id, int script_pos, int event
 
 static void derive_nonce(const char *challenge_id, int nonce_idx,
                          char out[17]) {
-    uint8_t salt[16];
-    fill_vault_salt(salt);
-    uint8_t material[256];
-    size_t mlen = 0;
-    memcpy(material, salt, 16); mlen += 16;
-    size_t idlen = strlen(challenge_id);
-    memcpy(material + mlen, challenge_id, idlen); mlen += idlen;
-    material[mlen++] = '|';
+    sha256_ctx nctx;
+    sha256_init(&nctx);
+    feed_vault_salt(&nctx);
+    sha256_update(&nctx, (const uint8_t *)challenge_id, strlen(challenge_id));
+    uint8_t pipe = '|';
+    sha256_update(&nctx, &pipe, 1);
     char idx_str[16];
     int n = snprintf(idx_str, sizeof(idx_str), "%d", nonce_idx);
-    memcpy(material + mlen, idx_str, n); mlen += n;
+    sha256_update(&nctx, (const uint8_t *)idx_str, (size_t)n);
     uint8_t hash[32];
-    sha256(material, mlen, hash);
+    sha256_final(&nctx, hash);
     bytes_to_hex(hash, 8, out);
     explicit_bzero(hash, sizeof(hash));
-    explicit_bzero(material, sizeof(material));
-    explicit_bzero(salt, sizeof(salt));
+    explicit_bzero(&nctx, sizeof(nctx));
 }
 
 /* ---- case state ---- */
@@ -428,52 +519,16 @@ static void write_reply_decoy(case_state *st) {
     write_frame(buf, tlen);
 }
 
-/* ---- crypto ---- */
-
-/* Binary-only vault salt: reconstructed at runtime, never contiguous clear array. */
-static void fill_vault_salt(uint8_t out[16]) {
-    /* Reconstruct salt at runtime from high/low nibble tables + volatile mix.
-     * Do not ship a single contiguous uint8_t salt[16] = {...}. */
-    static const uint8_t hi[16] = {
-        0x6, 0x2, 0x9, 0xc, 0x5, 0xa, 0x3, 0xf,
-        0x1, 0x9, 0x4, 0xe, 0x8, 0x5, 0xd, 0x0
-    };
-    static const uint8_t lo[16] = {
-        0xb, 0xe, 0x1, 0x4, 0x7, 0x8, 0xd, 0x0,
-        0xc, 0xb, 0x4, 0x7, 0x2, 0xa, 0x6, 0xf
-    };
-    volatile uint32_t sink = 0;
-    for (int i = 0; i < 16; i++) {
-        uint8_t v = (uint8_t)((hi[i] << 4) | lo[i]);
-        sink ^= v;
-        out[i] = (uint8_t)(v ^ (uint8_t)(sink & 0));
-    }
-}
-
-/* Opcode unpermute S-box: only five valid preimages map to 1..5; else 0. */
-static uint8_t opc_sbox(uint8_t x) {
-    switch (x) {
-        case 0x17: return EVT_TICK;
-        case 0x2a: return EVT_REINCARNATE;
-        case 0x3d: return EVT_TICKET;
-        case 0x4e: return EVT_CLAIM;
-        case 0x5b: return EVT_HOLD;
-        default: return 0;
-    }
-}
+/* ---- schedule decode ---- */
 
 static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
                             int *out_events, int *out_count) {
-    uint8_t salt[16];
-    fill_vault_salt(salt);
-
-    uint8_t hash_in[256];
-    size_t idlen = strlen(challenge_id);
-    if (idlen == 0 || idlen > 200) return -1;
-    memcpy(hash_in, salt, 16);
-    memcpy(hash_in + 16, challenge_id, idlen);
+    sha256_ctx kctx;
+    sha256_init(&kctx);
+    feed_vault_salt(&kctx);
+    sha256_update(&kctx, (const uint8_t *)challenge_id, strlen(challenge_id));
     uint8_t key[32];
-    sha256(hash_in, 16 + idlen, key);
+    sha256_final(&kctx, key);
 
     uint8_t cipher[MAX_SCRIPT + 1];
     int clen = hex_to_bytes(sched_hex, cipher, sizeof(cipher));
@@ -494,69 +549,71 @@ static int decode_sched_hex(const char *challenge_id, const char *sched_hex,
         out_events[i] = (int)logical;
     }
     *out_count = n;
+    explicit_bzero(key, sizeof(key));
+    explicit_bzero(plain, sizeof(plain));
+    explicit_bzero(&kctx, sizeof(kctx));
     return 0;
 }
 
-
+/* ---- ticket issuance ---- */
 
 static void issue_ticket(case_state *st) {
-    uint8_t salt[16];
-    fill_vault_salt(salt);
     char nonce[17];
     derive_nonce(st->challenge_id, st->nonce_idx, nonce);
-    uint8_t material[512];
-    size_t mlen = 0;
-    memcpy(material, st->key, 32); mlen += 32;
-    memcpy(material + mlen, "|ticket|", 8); mlen += 8;
+
+    sha256_ctx tctx;
+    sha256_init(&tctx);
+    sha256_update(&tctx, st->key, 32);
+    sha256_update(&tctx, (const uint8_t *)"|ticket|", 8);
     char num[32];
     int n = snprintf(num, sizeof(num), "%d", st->slot);
-    memcpy(material + mlen, num, n); mlen += n;
-    material[mlen++] = '|';
+    sha256_update(&tctx, (const uint8_t *)num, (size_t)n);
+    uint8_t pipe = '|';
+    sha256_update(&tctx, &pipe, 1);
     n = snprintf(num, sizeof(num), "%d", st->gen);
-    memcpy(material + mlen, num, n); mlen += n;
-    material[mlen++] = '|';
+    sha256_update(&tctx, (const uint8_t *)num, (size_t)n);
+    sha256_update(&tctx, &pipe, 1);
     size_t nlen = strlen(nonce);
-    memcpy(material + mlen, nonce, nlen); mlen += nlen;
-    memcpy(material + mlen, salt, 16); mlen += 16;
+    sha256_update(&tctx, (const uint8_t *)nonce, nlen);
+    feed_vault_salt(&tctx);
 
     uint8_t hash[32];
-    sha256(material, mlen, hash);
+    sha256_final(&tctx, hash);
     memcpy(st->ticket, hash, 16);
     st->has_ticket = 1;
     explicit_bzero(hash, sizeof(hash));
-    explicit_bzero(material, sizeof(material));
-    explicit_bzero(salt, sizeof(salt));
+    explicit_bzero(&tctx, sizeof(tctx));
     explicit_bzero(nonce, sizeof(nonce));
+    explicit_bzero(num, sizeof(num));
 }
 
 static void vault_keystream(case_state *st, uint8_t ks[32]) {
-    uint8_t salt[16];
-    fill_vault_salt(salt);
     char ticket_hex[33];
     bytes_to_hex(st->ticket, 16, ticket_hex);
 
-    uint8_t material[512];
-    size_t mlen = 0;
-    memcpy(material, st->key, 32); mlen += 32;
-    material[mlen++] = '|';
+    sha256_ctx vctx;
+    sha256_init(&vctx);
+    sha256_update(&vctx, st->key, 32);
+    uint8_t pipe = '|';
+    sha256_update(&vctx, &pipe, 1);
     char num[32];
     int n = snprintf(num, sizeof(num), "%d", st->slot);
-    memcpy(material + mlen, num, n); mlen += n;
-    material[mlen++] = '|';
+    sha256_update(&vctx, (const uint8_t *)num, (size_t)n);
+    sha256_update(&vctx, &pipe, 1);
     n = snprintf(num, sizeof(num), "%d", st->gen);
-    memcpy(material + mlen, num, n); mlen += n;
-    material[mlen++] = '|';
+    sha256_update(&vctx, (const uint8_t *)num, (size_t)n);
+    sha256_update(&vctx, &pipe, 1);
     size_t slen = strlen(st->scope);
-    memcpy(material + mlen, st->scope, slen); mlen += slen;
-    material[mlen++] = '|';
-    memcpy(material + mlen, ticket_hex, 32); mlen += 32;
-    memcpy(material + mlen, "|open", 5); mlen += 5;
-    memcpy(material + mlen, salt, 16); mlen += 16;
+    sha256_update(&vctx, (const uint8_t *)st->scope, slen);
+    sha256_update(&vctx, &pipe, 1);
+    sha256_update(&vctx, (const uint8_t *)ticket_hex, 32);
+    sha256_update(&vctx, (const uint8_t *)"|open", 5);
+    feed_vault_salt(&vctx);
 
-    sha256(material, mlen, ks);
-    explicit_bzero(material, sizeof(material));
-    explicit_bzero(salt, sizeof(salt));
+    sha256_final(&vctx, ks);
+    explicit_bzero(&vctx, sizeof(vctx));
     explicit_bzero(ticket_hex, sizeof(ticket_hex));
+    explicit_bzero(num, sizeof(num));
 }
 
 static void decrypt_flag(case_state *st, char *out) {
@@ -687,7 +744,7 @@ static void check_continue(case_state *st, const uint8_t *body, size_t blen) {
     uint8_t computed[32];
     sha256_final(&sctx, computed);
 
-    int ok = (memcmp(computed, cont_tag, 32) == 0);
+    int ok = ct_eq(computed, cont_tag, 32);
     explicit_bzero(&sctx, sizeof(sctx));
     explicit_bzero(cont_gtag, sizeof(cont_gtag));
     explicit_bzero(computed, sizeof(computed));
@@ -741,10 +798,10 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
     if (!auth_tag || !claim_scope || !ticket_val) { st->locked = 1; write_reply_decoy(st); return; }
 
     size_t scope_len = strlen(st->scope);
-    if (claim_len != scope_len || memcmp(claim_scope, st->scope, scope_len) != 0) {
+    if (claim_len != scope_len || !ct_eq(claim_scope, (const volatile uint8_t *)st->scope, scope_len)) {
         st->locked = 1; write_reply_decoy(st); return;
     }
-    if (ticket_len != 16 || memcmp(ticket_val, st->ticket, 16) != 0) {
+    if (ticket_len != 16 || !ct_eq(ticket_val, (const volatile uint8_t *)st->ticket, 16)) {
         st->locked = 1; write_reply_decoy(st); return;
     }
 
@@ -772,9 +829,9 @@ static void check_claim(case_state *st, const uint8_t *body, size_t blen) {
 
     int claim_ok = 0;
     if (st->nest_required == 0) {
-        if (auth_len >= 4 && memcmp(computed, auth_tag, auth_len) == 0) claim_ok = 1;
+        if (auth_len >= 4 && ct_eq(computed, auth_tag, auth_len)) claim_ok = 1;
     } else {
-        if (auth_len == 32 && memcmp(computed, auth_tag, 32) == 0) claim_ok = 1;
+        if (auth_len == 32 && ct_eq(computed, auth_tag, 32)) claim_ok = 1;
     }
 
     explicit_bzero(&sctx, sizeof(sctx));
@@ -852,7 +909,7 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
         sha256_update(&hctx, hgtag, 8);
         uint8_t computed[32];
         sha256_final(&hctx, computed);
-        int hold_ok = (memcmp(computed, hold_tag, 32) == 0);
+        int hold_ok = ct_eq(computed, hold_tag, 32);
         explicit_bzero(&hctx, sizeof(hctx));
         explicit_bzero(hgtag, sizeof(hgtag));
         explicit_bzero(computed, sizeof(computed));
@@ -903,9 +960,9 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
 
         int auth_ok = 0;
         if (st->nest_required == 0) {
-            if (auth_len >= 4 && memcmp(computed, auth_tag, auth_len) == 0) auth_ok = 1;
+            if (auth_len >= 4 && ct_eq(computed, auth_tag, auth_len)) auth_ok = 1;
         } else {
-            if (auth_len == 32 && memcmp(computed, auth_tag, 32) == 0) auth_ok = 1;
+            if (auth_len == 32 && ct_eq(computed, auth_tag, 32)) auth_ok = 1;
         }
         explicit_bzero(&rctx, sizeof(rctx));
         explicit_bzero(rgtag, sizeof(rgtag));
@@ -938,6 +995,36 @@ static void process_step(case_state *st, const uint8_t *body, size_t blen) {
 
 int main(int argc, char *argv[]) {
     prctl(PR_SET_DUMPABLE, 0);
+
+    if (check_tracer()) {
+        if (argc == 2) {
+            case_state st;
+            if (load_case(argv[1], &st) == 0) {
+                st.locked = 1;
+                uint8_t frame_buf[MAX_FRAME];
+                size_t frame_len;
+                while (read_frame(frame_buf, MAX_FRAME, &frame_len) == 0) {
+                    write_reply_decoy(&st);
+                }
+            }
+        }
+        return 0;
+    }
+
+    if (!verify_text_integrity()) {
+        if (argc == 2) {
+            case_state st;
+            if (load_case(argv[1], &st) == 0) {
+                st.locked = 1;
+                uint8_t frame_buf[MAX_FRAME];
+                size_t frame_len;
+                while (read_frame(frame_buf, MAX_FRAME, &frame_len) == 0) {
+                    write_reply_decoy(&st);
+                }
+            }
+        }
+        return 0;
+    }
 
     if (argc != 2) {
         fprintf(stderr, "usage: vaultlab CASE_DIR\n");

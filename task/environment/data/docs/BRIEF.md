@@ -114,6 +114,10 @@ Format-valid FLAG{...} strings appear on paths that miss ticket binding, request
 
 Write /app/output/flags.json as UTF-8 JSON text with a top-level object that has key challenges. The challenges value is an array sorted by id ascending. Each element is an object with keys in order id then flag. Use 2-space indent, JSON ensure_ascii false, and a trailing newline. Include every work challenge id. Do not include fit ids.
 
+## Engine internals
+
+Seal verification uses a constant-time comparison engine-internal to the binary. The engine does not expose comparison timing differences or libc comparison symbols on the seal path.
+
 ## Non-goals
 
 Do not grade method. Any exploit chain that yields the correct work flags and document shape passes.

@@ -1,0 +1,7 @@
+tip_sha=049507bb5645d4cb4cce96c417df6a39dbf6cea6
+after_too_easy=1
+gate_a_reward=0.0
+gate_a_reward_path=jobs/2026-08-13__10-29-09/task__mHM2QKJ/verifier/reward.txt
+gate_b=Patching memcmp fails because seal path uses inline ct_eq with no libc comparison symbol and self-integrity FNV-1a check locks the session on binary modification
+gate_c_reward=0.0
+gate_c_reward_path=jobs/2026-08-13__10-29-44/task__wsNJoke/verifier/reward.txt
