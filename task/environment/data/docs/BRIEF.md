@@ -62,6 +62,16 @@ Gate type codes: tick is 1, reincarnate is 2, ticket is 3, claim is 4, hold is 5
 
 A solver that has recovered the engine secret and decoded the schedule can compute gate_tags for every position. Without the engine secret, gate_tags are unpredictable (2^64 space per gate).
 
+## Seal preimage (byte exact)
+
+Every AUTH, CONTINUE, and HOLD_SEAL digest is SHA-256 of this exact preimage, in order:
+
+1. the 32 raw key bytes from key_hex
+2. one ASCII pipe byte (0x7c), not HMAC and not SHA-256(key concatenated with material with no separator)
+3. the material bytes for that gate (ASCII fields, then a final ASCII pipe, then 8 raw gate_tag bytes)
+
+Write SHA-256(key_bytes || "|" || material). Do not use HMAC-SHA256. Do not hash key||material without that pipe byte. The same pipe byte also appears inside the ASCII material between fields.
+
 ## Ticket request seal
 
 Ticket gates do not accept a bare NOTE. The caller must send AUTH plus NOTE in one frame. The AUTH value is a request seal tag.
